@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Tidy
+GenericName=Folder Cleanup
+Comment=Tidy a messy folder: see the plan, approve it, undo anything
+Exec=tidy %u
+Icon=edit-clear-all
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=clean;cleanup;duplicates;downloads;organize;
+NoDisplay=false
+StartupNotify=true
+StartupWMClass=app.tidy.Tidy
