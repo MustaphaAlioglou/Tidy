@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-from .core import HOLD_DAYS, History, Protected, make_plan, places
+from .core import HOLD_DAYS, MOVE, History, Protected, make_plan, places
 from .core import fmt
 
 
@@ -12,9 +12,12 @@ def _show_plan(plan):
     if not plan.groups:
         print("Nothing to tidy.")
         return
-    print(f"{plan.item_count} items -> {len(plan.groups)} groups, {fmt.size(plan.freeable)} can be freed\n")
+    p = plan.preview()
+    print(f"{plan.item_count} items -> {len(plan.groups)} groups, {fmt.size(plan.freeable)} can be freed")
+    print(f"before: {fmt.items(p.before_count)}, after: {fmt.items(p.after_count)}\n")
     for g in plan.groups:
-        print(f"{g.title} ({fmt.items(len(g.items))}, {fmt.size(g.size)})")
+        where = f"-> {g.dest}" if g.action == MOVE else f"-> holding area ({HOLD_DAYS} days)"
+        print(f"{g.title} ({fmt.items(len(g.items))}, {fmt.size(g.size)}) {where}")
         for i in g.items:
             print(f"  {os.path.relpath(i.path, plan.folder)}{'/' if i.is_dir else ''}  [{fmt.size(i.size)}] {i.reason}")
         print()

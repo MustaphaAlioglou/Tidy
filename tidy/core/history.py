@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from . import ops
 from .plan import HOLD, HOLD_DAYS
-from .safety import ARCHIVE_MARKER
+from .safety import TIDY_MARKER
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -133,8 +133,9 @@ class History:
                 if group.action == HOLD:
                     dst = os.path.join(self._holding_base(item.path), str(res.run), str(mid), name)
                 else:
-                    os.makedirs(group.dest, exist_ok=True)
-                    open(os.path.join(group.dest, ARCHIVE_MARKER), "a").close()
+                    if not os.path.isdir(group.dest):
+                        os.makedirs(group.dest, exist_ok=True)
+                        open(os.path.join(group.dest, TIDY_MARKER), "a").close()
                     dst = ops.unique_path(os.path.join(group.dest, name))
                 db.execute("UPDATE moves SET dst=? WHERE id=?", (dst, mid))
             try:
@@ -170,8 +171,8 @@ class History:
         else:
             parent = os.path.dirname(dst)
             try:
-                if os.listdir(parent) == [ARCHIVE_MARKER]:
-                    os.unlink(os.path.join(parent, ARCHIVE_MARKER))
+                if os.listdir(parent) == [TIDY_MARKER]:
+                    os.unlink(os.path.join(parent, TIDY_MARKER))
                     os.rmdir(parent)
             except OSError:
                 pass

@@ -5,15 +5,17 @@ BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
 ok_gtk=0; ok_qt=0
-/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')" 2>/dev/null && ok_gtk=1
-/usr/bin/python3 -c "import PySide6.QtWidgets" 2>/dev/null && ok_qt=1
+cd "$DIR"
+/usr/bin/python3 -c "import tidy.gtk.app" 2>/dev/null && ok_gtk=1
+/usr/bin/python3 -c "import tidy.qt.app" 2>/dev/null && ok_qt=1
 if [ $ok_gtk = 0 ] && [ $ok_qt = 0 ]; then
     cat >&2 <<'MSG'
-tidy: needs GTK4 + libadwaita (GNOME) or PySide6 (KDE) for the system Python.
+tidy: needs GTK4 + libadwaita 1.5+ (GNOME) or PySide6 (KDE) for the system Python.
 
   Arch          sudo pacman -S python-gobject libadwaita   # or: pyside6
-  Debian/Ubuntu sudo apt install python3-gi gir1.2-adw-1   # or: python3-pyside6.qtwidgets
+  Debian/Ubuntu sudo apt install python3-gi gir1.2-adw-1   # or: python3-pyside6.qtwidgets python3-pyside6.qtdbus
   Fedora        sudo dnf install python3-gobject libadwaita # or: python3-pyside6
+  openSUSE      sudo zypper install python3-gobject typelib-1_0-Adw-1  # or: python3-pyside6
 MSG
     exit 1
 fi

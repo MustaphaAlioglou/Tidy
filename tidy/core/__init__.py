@@ -6,7 +6,7 @@ from .safety import Protected, check_folder
 from .scan import Cancelled, scan
 
 APP_ID = "app.tidy.Tidy"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def make_plan(folder, cancel=None, progress=None, settings=None):

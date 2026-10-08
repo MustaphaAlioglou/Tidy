@@ -7,9 +7,15 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
-from ..core import APP_ID, HOLD, HOLD_DAYS, VERSION, Cancelled, History, Protected, make_plan, places  # noqa: E402
+ADW_MIN = (1, 5)
+if (Adw.get_major_version(), Adw.get_minor_version()) < ADW_MIN:
+    raise ImportError(f"libadwaita {'.'.join(map(str, ADW_MIN))}+ needed, found "
+                      f"{Adw.get_major_version()}.{Adw.get_minor_version()}")
+
+from ..core import (APP_ID, HOLD, HOLD_DAYS, MOVE, VERSION, Cancelled, History, Protected,  # noqa: E402
+                    check_folder, make_plan, places)
 from ..core import fmt  # noqa: E402
 
 size = GLib.format_size
@@ -37,6 +43,14 @@ def tilde(path):
 def sym(*names):
     theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
     return next((n for n in names if theme.has_icon(n)), names[-1])
+
+
+def file_icon(path, is_dir=False):
+    if is_dir:
+        return Gio.ThemedIcon.new(sym("folder-symbolic", "folder"))
+    kind = Gio.content_type_guess(path, None)[0]
+    names = [*Gio.content_type_get_symbolic_icon(kind).get_names(), *Gio.content_type_get_icon(kind).get_names()]
+    return Gio.ThemedIcon.new(sym(*names, "text-x-generic-symbolic"))
 
 
 def spinner():
@@ -199,47 +213,98 @@ class PlanPage(Adw.NavigationPage):
         super().__init__(title=os.path.basename(plan.folder), tag="plan")
         self.win = win
         self.plan = plan
+        self.items = {}
+        self.expanded = set()
         header = Adw.HeaderBar()
-        self.title = Adw.WindowTitle(title=os.path.basename(plan.folder), subtitle=tilde(plan.folder))
-        header.set_title_widget(self.title)
         view = Adw.ToolbarView()
         view.add_top_bar(header)
         self.set_child(view)
 
         if not plan.groups:
+            header.set_title_widget(Adw.WindowTitle(title=self.get_title(), subtitle=tilde(plan.folder)))
             view.set_content(Adw.StatusPage(
                 icon_name="emblem-ok-symbolic", title="Already Tidy",
                 description=f"Looked at {plan.scanned:,} files ({size(plan.total_size)}). Nothing needs tidying."))
             return
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24,
-                          margin_top=24, margin_bottom=24, margin_start=12, margin_end=12)
-        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        hero.append(Gtk.Label(label=f"{plan.item_count:,} items → {len(plan.groups)} groups",
-                              css_classes=["title-1"], wrap=True))
-        self.summary = Gtk.Label(css_classes=["dim-label"], wrap=True, justify=Gtk.Justification.CENTER)
-        hero.append(self.summary)
-        content.append(hero)
+        actions = Gio.SimpleActionGroup()
+        reveal = Gio.SimpleAction.new("reveal", GLib.VariantType.new("s"))
+        reveal.connect("activate", lambda _a, v: show_in_folder(self.items[v.get_string()].path, win))
+        actions.add_action(reveal)
+        move = Gio.SimpleAction.new("move", GLib.VariantType.new("s"))
+        move.connect("activate", lambda _a, v: self.move(*v.get_string().split("|", 1)))
+        actions.add_action(move)
+        self.insert_action_group("plan", actions)
 
-        for group in plan.groups:
-            content.append(self._group(group))
-
-        if plan.skipped:
-            skipped = Adw.ExpanderRow(title="Left alone", subtitle=fmt.items(len(plan.skipped)))
-            for path, reason in plan.skipped:
-                skipped.add_row(plain_row(os.path.relpath(path, plan.folder), reason))
-            content.append(boxed_rows("Protected", [skipped],
-                                      "Repositories, projects and hidden files are never touched."))
-
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
-        scroller.set_child(Adw.Clamp(maximum_size=640, child=content))
-        view.set_content(scroller)
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24,
+                               margin_top=24, margin_bottom=24, margin_start=12, margin_end=12)
+        self.scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        self.scroller.set_child(Adw.Clamp(maximum_size=640, child=self.content))
+        stack = Adw.ViewStack()
+        stack.add_titled_with_icon(self.scroller, "plan", "Plan", sym("view-list-symbolic", "view-list-details-symbolic"))
+        stack.add_titled_with_icon(self._big_page(), "big", "What's Big",
+                                   sym("drive-harddisk-symbolic", "folder-symbolic"))
+        header.set_title_widget(Adw.ViewSwitcher(stack=stack, policy=Adw.ViewSwitcherPolicy.WIDE))
+        view.set_content(stack)
 
         self.go = Gtk.Button(css_classes=["pill", "suggested-action"], halign=Gtk.Align.CENTER,
                              margin_top=12, margin_bottom=12)
         self.go.connect("clicked", lambda *_: win.apply(plan))
         view.add_bottom_bar(self.go)
+        self.rebuild()
+
+    def rebuild(self):
+        scroll = self.scroller.get_vadjustment().get_value()
+        while child := self.content.get_first_child():
+            self.content.remove(child)
+        self.items.clear()
+        plan = self.plan
+
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        hero.append(Gtk.Label(label=f"{plan.item_count:,} items → {len(plan.groups)} groups",
+                              css_classes=["title-1"], wrap=True))
+        hero.append(Gtk.Label(label=f"{tilde(plan.folder)} · nothing moves until you approve",
+                              css_classes=["dim-label"], wrap=True))
+        self.content.append(hero)
+        self.content.append(self._compare())
+
+        for group in plan.groups:
+            self.content.append(self._group(group))
+
+        if plan.skipped:
+            skipped = Adw.ExpanderRow(title="Left alone", subtitle=fmt.items(len(plan.skipped)))
+            for path, reason in plan.skipped:
+                skipped.add_row(plain_row(os.path.relpath(path, plan.folder), reason))
+            self.content.append(boxed_rows("Protected", [skipped],
+                                           "Repositories, projects and hidden files are never touched."))
         self.refresh()
+        GLib.idle_add(self.scroller.get_vadjustment().set_value, scroll)
+
+    def _compare(self):
+        def card(caption):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, css_classes=["card"],
+                          width_request=170)
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=12, margin_bottom=12,
+                            margin_start=18, margin_end=18)
+            inner.append(Gtk.Label(label=caption, css_classes=["caption-heading", "dim-label"], xalign=0))
+            count = Gtk.Label(css_classes=["title-2"], xalign=0)
+            amount = Gtk.Label(css_classes=["dim-label"], xalign=0)
+            inner.append(count)
+            inner.append(amount)
+            box.append(inner)
+            return box, count, amount
+
+        row = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER)
+        before, self.before_count, self.before_size = card("BEFORE")
+        after, self.after_count, self.after_size = card("AFTER")
+        row.append(before)
+        row.append(Gtk.Image(icon_name="go-next-symbolic", css_classes=["dim-label"]))
+        row.append(after)
+        self.changes = Gtk.Label(css_classes=["dim-label"], wrap=True, justify=Gtk.Justification.CENTER)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.append(row)
+        box.append(self.changes)
+        return box
 
     def _group(self, group):
         expander = Adw.ExpanderRow(title=fmt.items(len(group.items)), subtitle=size(group.size),
@@ -247,10 +312,14 @@ class PlanPage(Adw.NavigationPage):
         filled = []
 
         def fill(*_):
+            if expander.get_expanded():
+                self.expanded.add(group.key)
+            else:
+                self.expanded.discard(group.key)
             if expander.get_expanded() and not filled:
                 filled.append(True)
                 for item in group.items:
-                    expander.add_row(self._item_row(item))
+                    expander.add_row(self._item_row(item, group))
 
         def toggled(*_):
             group.enabled = expander.get_enable_expansion()
@@ -258,9 +327,28 @@ class PlanPage(Adw.NavigationPage):
 
         expander.connect("notify::expanded", fill)
         expander.connect("notify::enable-expansion", toggled)
-        return boxed_rows(group.title, [expander], group.description)
+        if group.key in self.expanded and group.enabled:
+            expander.set_expanded(True)
 
-    def _item_row(self, item):
+        box = boxed_rows(group.title, [expander], group.description)
+        if group.action == MOVE:
+            dest = Gtk.Button(css_classes=["flat"], valign=Gtk.Align.CENTER, tooltip_text="Change Destination",
+                              child=Adw.ButtonContent(icon_name=sym("folder-symbolic"), label=tilde(group.dest),
+                                                      can_shrink=True))
+            dest.connect("clicked", lambda *_: self.change_dest(group))
+            box.set_header_suffix(dest)
+        else:
+            box.set_header_suffix(Gtk.Label(label="Holding area", css_classes=["dim-label", "caption"],
+                                            valign=Gtk.Align.CENTER))
+
+        target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        target.connect("drop", lambda _t, value, _x, _y: self.move(value, group.key) or True)
+        box.add_controller(target)
+        return box
+
+    def _item_row(self, item, group):
+        key = str(id(item))
+        self.items[key] = item
         name = os.path.relpath(item.path, self.plan.folder) + ("/" if item.is_dir else "")
         row = plain_row(name, f"{item.reason} · {size(item.size)}")
         check = Gtk.CheckButton(active=item.enabled, valign=Gtk.Align.CENTER)
@@ -271,19 +359,96 @@ class PlanPage(Adw.NavigationPage):
         check.connect("toggled", toggled)
         row.add_prefix(check)
         row.set_activatable_widget(check)
-        reveal = Gtk.Button(icon_name=sym("folder-open-symbolic", "document-open-folder-symbolic", "folder-symbolic"), valign=Gtk.Align.CENTER,
-                            css_classes=["flat"], tooltip_text="Show in Folder")
-        reveal.connect("clicked", lambda *_: show_in_folder(item.path, self.win))
-        row.add_suffix(reveal)
+
+        menu = Gio.Menu()
+        entry = Gio.MenuItem.new("Show in Folder", None)
+        entry.set_action_and_target_value("plan.reveal", GLib.Variant.new_string(key))
+        menu.append_item(entry)
+        others = Gio.Menu()
+        for g in self.plan.groups:
+            if g is not group:
+                entry = Gio.MenuItem.new(g.title, None)
+                entry.set_action_and_target_value("plan.move", GLib.Variant.new_string(f"{key}|{g.key}"))
+                others.append_item(entry)
+        if others.get_n_items():
+            menu.append_section("Move to Group", others)
+        row.add_suffix(Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, valign=Gtk.Align.CENTER,
+                                      css_classes=["flat"], tooltip_text="More"))
+
+        drag = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        drag.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(key))
+        drag.connect("drag-begin", lambda src, _d: src.set_icon(Gtk.WidgetPaintable(widget=row), 0, 0))
+        row.add_controller(drag)
         return row
+
+    def _big_page(self):
+        plan = self.plan
+        page_ = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(title="What's Taking Up Space",
+                                     description=f"{size(plan.total_size)} in {fmt.items(plan.top_count)}")
+        total = plan.total_size or 1
+        for path, n, is_dir in plan.largest:
+            share = n / total
+            row = plain_row(os.path.basename(path) + ("/" if is_dir else ""),
+                            f"{size(n)} · {share:.0%}" if share >= 0.01 else size(n))
+            row.add_prefix(Gtk.Image.new_from_gicon(file_icon(path, is_dir)))
+            bar = Gtk.LevelBar(value=share, valign=Gtk.Align.CENTER, width_request=140)
+            for name in ("low", "high", "full"):
+                bar.remove_offset_value(name)
+            row.add_suffix(bar)
+            reveal = Gtk.Button(icon_name=sym("folder-open-symbolic", "document-open-folder-symbolic", "folder-symbolic"),
+                                valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Show in Folder")
+            reveal.connect("clicked", lambda *_, p=path: show_in_folder(p, self.win))
+            row.add_suffix(reveal)
+            group.add(row)
+        page_.add(group)
+        return page_
+
+    def move(self, key, group_key):
+        item = self.items.get(key)
+        target = next((g for g in self.plan.groups if g.key == group_key), None)
+        if item and target:
+            self.plan.move_item(item, target)
+            self.expanded.add(target.key)
+            GLib.idle_add(self.rebuild)
+
+    def change_dest(self, group):
+        dialog = Gtk.FileDialog(title=f"Where Should {group.title} Go?", modal=True,
+                                initial_folder=Gio.File.new_for_path(self.plan.folder))
+
+        def picked(d, res):
+            try:
+                folder = d.select_folder_finish(res)
+            except GLib.Error:
+                return
+            path = folder and folder.get_path()
+            if not path:
+                return
+            if os.path.realpath(path) == self.plan.folder:
+                self.win.alert("Pick Another Folder", "That is the folder being tidied.")
+                return
+            try:
+                group.dest = check_folder(path)
+            except Protected as e:
+                self.win.alert("Tidy Can't Move Files There", str(e))
+                return
+            self.rebuild()
+        dialog.select_folder(self.win, None, picked)
 
     def refresh(self):
         chosen = self.plan.selected
-        moved = sum(1 for g, _ in chosen if g.action != HOLD)
-        parts = [f"{size(self.plan.freeable)} can be freed"]
-        if moved:
-            parts.append(f"{fmt.items(moved)} archived")
-        self.summary.set_label(" · ".join(parts) + ". Nothing moves until you approve.")
+        p = self.plan.preview()
+        self.before_count.set_label(fmt.items(p.before_count))
+        self.before_size.set_label(size(p.before_size))
+        self.after_count.set_label(fmt.items(p.after_count))
+        self.after_size.set_label(size(p.after_size))
+        parts = []
+        for d in p.destinations:
+            where = os.path.basename(d.path) if os.path.dirname(d.path) == self.plan.folder else tilde(d.path)
+            parts.append(f"{where}{' (new)' if d.new else ''} +{d.count}")
+        if p.held_count:
+            parts.append(f"holding area {fmt.items(p.held_count)}, {size(p.held_size)}")
+        self.changes.set_label(" · ".join(parts))
         self.go.set_label(f"Tidy {fmt.items(len(chosen))}" if chosen else "Nothing Selected")
         self.go.set_sensitive(bool(chosen))
 

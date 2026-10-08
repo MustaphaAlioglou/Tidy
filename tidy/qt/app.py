@@ -7,12 +7,13 @@ from PySide6.QtCore import QDateTime, QFileInfo, QLocale, QMimeDatabase, QObject
 from PySide6.QtDBus import QDBus, QDBusConnection, QDBusMessage
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox,
-                               QFileDialog, QFileIconProvider, QHBoxLayout, QHeaderView, QLabel,
+                               QFileDialog, QFileIconProvider, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
                                QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSizePolicy,
-                               QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QStackedWidget, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
-from ..core import APP_ID, HOLD, HOLD_DAYS, VERSION, Cancelled, History, Protected, make_plan, places
+from ..core import (APP_ID, HOLD, HOLD_DAYS, MOVE, VERSION, Cancelled, History, Protected, check_folder,
+                    make_plan, places)
 from ..core import fmt
 
 
@@ -105,12 +106,49 @@ def placeholder(icon_names, title, text="", widgets=()):
     return page
 
 
+class PlanTree(QTreeWidget):
+    dropped = Signal(object, object)
+
+    def __init__(self):
+        super().__init__()
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+
+    def group_at(self, pos):
+        it = self.itemAt(pos)
+        top = it and (it.parent() or it)
+        return top.data(0, Qt.UserRole) if top else None
+
+    def dragEnterEvent(self, e):
+        e.acceptProposedAction() if e.source() is self else e.ignore()
+
+    def dragMoveEvent(self, e):
+        if e.source() is self and self.group_at(e.position().toPoint()):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dropEvent(self, e):
+        key = self.group_at(e.position().toPoint())
+        if e.source() is self and key:
+            e.setDropAction(Qt.CopyAction)
+            e.accept()
+            moved = [i for i in self.selectedItems() if i.parent()]
+            QTimer.singleShot(0, lambda: self.dropped.emit(moved, key))
+        else:
+            e.ignore()
+
+
 class PlanView(QWidget):
     def __init__(self, win):
         super().__init__()
         self.win = win
         self.plan = None
-        self.rows = []
+        self.rows = {}
+        self.expanded = None
         self.icons = QFileIconProvider()
         layout = QVBoxLayout(self)
         self.headline = QLabel()
@@ -118,10 +156,29 @@ class PlanView(QWidget):
         font.setPointSizeF(font.pointSizeF() * 1.3)
         self.headline.setFont(font)
         layout.addWidget(self.headline)
-        self.summary = QLabel(wordWrap=True)
-        layout.addWidget(self.summary)
 
-        self.tree = QTreeWidget()
+        self.tabs = QTabWidget(documentMode=True)
+        layout.addWidget(self.tabs, 1)
+        plan_tab = QWidget()
+        plan_layout = QVBoxLayout(plan_tab)
+        plan_layout.setContentsMargins(0, 6, 0, 0)
+
+        compare = QFrame(frameShape=QFrame.StyledPanel)
+        grid = QGridLayout(compare)
+        self.before = QLabel()
+        self.after = QLabel()
+        arrow = QLabel()
+        arrow.setPixmap(icon("go-next", "arrow-right").pixmap(32, 32))
+        grid.addWidget(self.before, 0, 0)
+        grid.addWidget(arrow, 0, 1)
+        grid.addWidget(self.after, 0, 2)
+        self.changes = dim(QLabel(wordWrap=True))
+        grid.addWidget(self.changes, 0, 3)
+        grid.setColumnStretch(3, 1)
+        grid.setHorizontalSpacing(18)
+        plan_layout.addWidget(compare)
+
+        self.tree = PlanTree()
         self.tree.setHeaderLabels(["Name", "Size", "Modified", "Why"])
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -129,19 +186,31 @@ class PlanView(QWidget):
         self.tree.customContextMenuRequested.connect(self.context_menu)
         self.tree.itemDoubleClicked.connect(self.reveal)
         self.tree.itemChanged.connect(lambda *_: self.pending.start())
+        self.tree.dropped.connect(self.move)
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         for col in (1, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         header.setStretchLastSection(False)
-        layout.addWidget(self.tree, 1)
+        plan_layout.addWidget(self.tree, 1)
+        self.tabs.addTab(plan_tab, icon("view-list-tree", "view-list-details"), "Plan")
+
+        self.big = QTreeWidget(rootIsDecorated=False, uniformRowHeights=True)
+        self.big.setHeaderLabels(["Name", "Size", "Share"])
+        self.big.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.big.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.big.header().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.big.header().resizeSection(2, 200)
+        self.big.header().setStretchLastSection(False)
+        self.big.itemDoubleClicked.connect(lambda it, _c: show_in_folder(it.data(0, Qt.UserRole)))
+        self.tabs.addTab(self.big, icon("drive-harddisk", "folder"), "What's Big")
 
         self.pending = QTimer(self, singleShot=True, interval=0)
         self.pending.timeout.connect(self.sync)
 
         buttons = QHBoxLayout()
-        self.hint = dim(QLabel("Nothing moves until you click Tidy."))
-        buttons.addWidget(self.hint, 1)
+        buttons.addWidget(dim(QLabel("Nothing moves until you click Tidy. Drag files between groups to change "
+                                     "what happens to them.")), 1)
         discard = QPushButton(icon("dialog-cancel"), "Discard")
         discard.clicked.connect(win.go_home)
         buttons.addWidget(discard)
@@ -153,7 +222,31 @@ class PlanView(QWidget):
 
     def show_plan(self, plan):
         self.plan = plan
-        self.rows = []
+        self.expanded = None
+        self.tabs.setCurrentIndex(0)
+        self.headline.setText(f"<b>{plan.item_count:,} items → {len(plan.groups)} groups</b> "
+                              f"in {tilde(plan.folder)}")
+        self.fill_big()
+        self.rebuild()
+
+    def where(self, group):
+        if group.action == HOLD:
+            return f"Holding area, {HOLD_DAYS} days"
+        name = os.path.basename(group.dest) if os.path.dirname(group.dest) == self.plan.folder else tilde(group.dest)
+        return f"Moves to {name}"
+
+    def rebuild(self):
+        plan = self.plan
+        if self.expanded is not None:
+            for i in range(self.tree.topLevelItemCount()):
+                top = self.tree.topLevelItem(i)
+                key = top.data(0, Qt.UserRole)
+                if key:
+                    (self.expanded.add if top.isExpanded() else self.expanded.discard)(key)
+        else:
+            self.expanded = {g.key for g in plan.groups if len(plan.groups) == 1 or len(g.items) <= 8}
+        scroll = self.tree.verticalScrollBar().value()
+        self.rows = {}
         self.tree.blockSignals(True)
         self.tree.clear()
         bold = QFont(self.tree.font())
@@ -161,12 +254,12 @@ class PlanView(QWidget):
         locale = QLocale()
         for group in plan.groups:
             top = QTreeWidgetItem(self.tree, [f"{group.title} ({len(group.items)})", size(group.size), "",
-                                              "Moves to Archive" if group.action != HOLD
-                                              else f"Holding area, {HOLD_DAYS} days"])
+                                              self.where(group)])
+            top.setData(0, Qt.UserRole, group.key)
             top.setToolTip(0, group.description)
             top.setToolTip(3, group.description)
             top.setFont(0, bold)
-            top.setFlags(top.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            top.setFlags((top.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate) & ~Qt.ItemIsDragEnabled)
             top.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
             for item in group.items:
                 rel = os.path.relpath(item.path, plan.folder) + ("/" if item.is_dir else "")
@@ -175,53 +268,111 @@ class PlanView(QWidget):
                 child.setIcon(0, self.icons.icon(QFileInfo(item.path)))
                 child.setToolTip(0, item.path)
                 child.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
-                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                child.setFlags((child.flags() | Qt.ItemIsUserCheckable) & ~Qt.ItemIsDropEnabled)
                 child.setCheckState(0, Qt.Checked if item.enabled and group.enabled else Qt.Unchecked)
-                self.rows.append((child, item, group, top))
-            top.setExpanded(len(plan.groups) == 1 or len(group.items) <= 8)
+                self.rows[id(child)] = (child, item, group, top)
+            if not group.items:
+                top.setCheckState(0, Qt.Unchecked)
+            top.setExpanded(group.key in self.expanded)
         if plan.skipped:
             top = QTreeWidgetItem(self.tree, [f"Left alone ({len(plan.skipped)})", "", "",
                                               "Protected, never touched"])
             top.setFont(0, bold)
             top.setIcon(0, icon("security-high", "emblem-locked"))
+            top.setFlags(top.flags() & ~(Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled))
             for path, reason in plan.skipped:
                 QTreeWidgetItem(top, [os.path.relpath(path, plan.folder), "", "", reason]).setDisabled(True)
         self.tree.blockSignals(False)
-        self.headline.setText(f"<b>{plan.item_count:,} items → {len(plan.groups)} groups</b> "
-                              f"in {tilde(plan.folder)}")
+        QTimer.singleShot(0, lambda: self.tree.verticalScrollBar().setValue(scroll))
         self.sync()
 
+    def fill_big(self):
+        self.big.clear()
+        total = self.plan.total_size or 1
+        for path, n, is_dir in self.plan.largest:
+            row = QTreeWidgetItem(self.big, [os.path.basename(path) + ("/" if is_dir else ""), size(n)])
+            row.setIcon(0, self.icons.icon(QFileInfo(path)))
+            row.setData(0, Qt.UserRole, path)
+            row.setToolTip(0, path)
+            row.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            bar = QProgressBar(maximum=1000, value=round(n / total * 1000), format=f"{n / total:.0%}")
+            self.big.setItemWidget(row, 2, bar)
+
     def sync(self):
-        for child, item, group, top in self.rows:
+        for child, item, group, top in self.rows.values():
             item.enabled = child.checkState(0) == Qt.Checked
             group.enabled = top.checkState(0) != Qt.Unchecked
+        p = self.plan.preview()
+        self.before.setText(f"<small>BEFORE</small><br><big><b>{fmt.items(p.before_count)}</b></big>"
+                            f"<br>{size(p.before_size)}")
+        self.after.setText(f"<small>AFTER</small><br><big><b>{fmt.items(p.after_count)}</b></big>"
+                           f"<br>{size(p.after_size)}")
+        parts = []
+        for d in p.destinations:
+            name = os.path.basename(d.path) if os.path.dirname(d.path) == self.plan.folder else tilde(d.path)
+            parts.append(f"{name}{' (new)' if d.new else ''} +{d.count}")
+        if p.held_count:
+            parts.append(f"holding area {fmt.items(p.held_count)}, {size(p.held_size)}")
+        self.changes.setText(" · ".join(parts))
         chosen = self.plan.selected
-        moved = sum(1 for g, _ in chosen if g.action != HOLD)
-        text = f"Looked at {self.plan.scanned:,} files ({size(self.plan.total_size)}). " \
-               f"{size(self.plan.freeable)} can be freed"
-        if moved:
-            text += f", {fmt.items(moved)} archived"
-        self.summary.setText(text + ".")
         self.go.setText(f"Tidy {fmt.items(len(chosen))}")
         self.go.setEnabled(bool(chosen))
 
-    def _path(self, qitem):
-        return next((item.path for child, item, _, _ in self.rows if child is qitem), None)
+    def _row(self, qitem):
+        return self.rows.get(id(qitem)) if qitem else None
 
     def reveal(self, qitem, _col=0):
-        path = self._path(qitem)
-        if path:
-            show_in_folder(path)
+        row = self._row(qitem)
+        if row:
+            show_in_folder(row[1].path)
+
+    def move(self, qitems, key):
+        self.sync()
+        target = next(g for g in self.plan.groups if g.key == key)
+        for q in qitems:
+            row = self._row(q)
+            if row:
+                self.plan.move_item(row[1], target)
+        self.expanded.add(key)
+        self.rebuild()
+
+    def change_dest(self, group):
+        path = QFileDialog.getExistingDirectory(self, f"Where Should {group.title} Go?", group.dest
+                                                if os.path.isdir(group.dest) else self.plan.folder)
+        if not path:
+            return
+        if os.path.realpath(path) == self.plan.folder:
+            QMessageBox.information(self, "Pick Another Folder", "That is the folder being tidied.")
+            return
+        try:
+            group.dest = check_folder(path)
+        except Protected as e:
+            QMessageBox.information(self, "Tidy Can't Move Files There", str(e))
+            return
+        self.sync()
+        self.rebuild()
 
     def context_menu(self, pos):
         qitem = self.tree.itemAt(pos)
-        path = qitem and self._path(qitem)
-        if not path:
+        if not qitem:
             return
         menu = QMenu(self)
-        menu.addAction(icon("document-open-folder", "folder-open"), "Show in Folder", lambda: show_in_folder(path))
-        menu.addAction(icon("document-open"), "Open", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+        key = qitem.data(0, Qt.UserRole)
+        group = next((g for g in self.plan.groups if g.key == key), None)
+        if group and group.action == MOVE:
+            menu.addAction(icon("folder-new", "folder"), "Change Destination…", lambda: self.change_dest(group))
+        row = self._row(qitem)
+        if row:
+            path = row[1].path
+            menu.addAction(icon("document-open-folder", "folder-open"), "Show in Folder", lambda: show_in_folder(path))
+            menu.addAction(icon("document-open"), "Open", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+            sub = menu.addMenu(icon("transform-move", "go-jump"), "Move to Group")
+            picked = [i for i in self.tree.selectedItems() if self._row(i)] or [qitem]
+            for g in self.plan.groups:
+                if g is not row[2]:
+                    sub.addAction(g.title, lambda k=g.key: self.move(picked, k))
+        if not menu.isEmpty():
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
 
 
 def time_to_qdt(ts):

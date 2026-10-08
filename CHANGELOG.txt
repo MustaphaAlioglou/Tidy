@@ -1,0 +1,62 @@
+Tidy changelog
+==============
+
+0.2.0 (2026-10-07)
+------------------
+
+Added
+  * Sort by type. Loose files are grouped into Pictures, Documents, Music,
+    Videos and Archives, each moving into its own folder. Files without an
+    extension are recognised by their first bytes (PNG, JPEG, PDF, ZIP, MP4,
+    Matroska, Ogg, FLAC, WebP, ...).
+  * Before/after summary at the top of the plan, for example
+    "21 items -> 8 items", with the new folders and the holding-area total.
+    It updates as you tick and untick.
+  * Move files between groups: drag in either frontend, or use the row
+    menu (GTK) or "Move to Group" in the context menu (Qt).
+  * Change where a "move" group goes. Folders that are protected and the
+    folder being tidied are refused.
+  * "What's Big" tab listing the largest items with their share of the
+    space.
+  * tidy-cli scan prints each group's destination and the before/after
+    count.
+  * GUI tests that drive both frontends through scan, plan, tidy and undo.
+  * Container test matrix (tests/distro/run.sh) for Ubuntu, Debian, Fedora,
+    Arch and openSUSE.
+
+Changed
+  * Folders Tidy creates carry a hidden ".tidy-folder" marker (it was
+    ".tidy-archive"), so later scans leave them alone. Folders that already
+    existed are reused and are never marked.
+  * The GTK frontend needs libadwaita 1.5 or newer. On older systems the
+    launcher falls back to Qt, and install.sh says which frontends work.
+  * The Old Files description no longer names the destination; the group
+    header shows it instead.
+
+Fixed
+  * Missing icons in the GTK frontend under themes such as Breeze and
+    Papirus that lack some symbolic icons.
+
+0.1.0 (2026-10-07)
+------------------
+
+First release.
+
+  * Scan a folder and preview a plan: clutter (unfinished downloads, empty
+    folders, archives already extracted), exact duplicates, installers
+    (already installed or older than 30 days) and files not used in 6
+    months.
+  * Nothing moves until you approve. Untick whole groups or single files.
+  * Removed items go to a holding area for 30 days and then expire. Old
+    files move to an Archive folder.
+  * Every move is logged in SQLite before it happens. An interrupted run is
+    reconciled on the next start.
+  * Undo a whole run or single files from Tidy History. A name that is now
+    taken comes back as "name (2)".
+  * Moves never overwrite (renameat2 RENAME_NOREPLACE) and skip files that
+    changed since the scan or were modified in the last 10 minutes.
+  * Protected: system folders, the home folder itself, hidden files, git and
+    other repositories, project folders, other drives and symlinks.
+  * Scanning reads with O_NOATIME, so it never makes old files look recent.
+  * GTK4/libadwaita frontend for GNOME, Qt 6 frontend for KDE, chosen
+    automatically. Also tidy-cli for the terminal.

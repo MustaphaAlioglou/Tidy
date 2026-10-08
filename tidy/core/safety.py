@@ -8,7 +8,7 @@ VCS_MARKERS = {".git", ".hg", ".svn", ".bzr"}
 PROJECT_MARKERS = {"Cargo.toml", "package.json", "pyproject.toml", "setup.py", "go.mod",
                    "CMakeLists.txt", "meson.build", "Makefile", "pom.xml", "build.gradle",
                    "composer.json", "Gemfile", ".project", ".idea", ".vscode"}
-ARCHIVE_MARKER = ".tidy-archive"
+TIDY_MARKER = ".tidy-folder"
 
 
 class Protected(Exception):
@@ -28,8 +28,8 @@ def protected_reason(path):
         return "git repository" if ".git" in names else "version-controlled folder"
     if names & PROJECT_MARKERS:
         return "project folder"
-    if ARCHIVE_MARKER in names:
-        return "Tidy archive"
+    if TIDY_MARKER in names:
+        return "made by Tidy"
     return None
 
 

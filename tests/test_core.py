@@ -123,6 +123,69 @@ class Rules(Base):
         self.assertEqual(package_name("yay-bin-12.3.5-1-x86_64.pkg.tar.zst"), "yay-bin")
 
 
+class Sorting(Base):
+    def test_groups_by_kind(self):
+        self.make("a.png", b"1", age_days=2)
+        self.make("b.PDF", b"2", age_days=2)
+        self.make("song.flac", b"3", age_days=2)
+        self.make("noext", b"%PDF-1.7 hello", age_days=2)
+        self.make("weird.xyz", b"4", age_days=2)
+        self.make("tool.AppImage", b"5", age_days=2)
+        plan = self.plan()
+        self.assertEqual(self.paths(plan, "sort:Pictures"), ["a.png"])
+        self.assertEqual(self.paths(plan, "sort:Documents"), ["b.PDF", "noext"])
+        self.assertEqual(self.paths(plan, "sort:Music"), ["song.flac"])
+        self.assertNotIn("weird.xyz", str(plan.groups))
+        self.assertNotIn("tool.AppImage", str(plan.groups))
+
+    def test_sorted_folder_is_left_alone_next_time(self):
+        self.make("a.png", b"1", age_days=2)
+        self.history.apply(self.plan())
+        plan = self.plan()
+        self.assertEqual(plan.groups, [])
+        self.assertIn("made by Tidy", [r for _, r in plan.skipped])
+
+    def test_existing_folder_is_reused_not_marked(self):
+        self.make("a.png", b"1", age_days=2)
+        self.make("Pictures/old.png", b"2", age_days=2)
+        res = self.history.apply(self.plan())
+        self.assertEqual(sorted(os.listdir(os.path.join(self.dir, "Pictures"))), ["a.png", "old.png"])
+        self.history.undo(res.run)
+        self.assertEqual(os.listdir(os.path.join(self.dir, "Pictures")), ["old.png"])
+
+    def test_preview_counts(self):
+        self.make("a.png", b"1", age_days=2)
+        self.make("b.png", b"2", age_days=2)
+        self.make("c.pdf", b"3", age_days=2)
+        self.make("c copy.pdf", b"3", age_days=2)
+        self.make("keep.xyz", b"4", age_days=2)
+        p = self.plan().preview()
+        self.assertEqual((p.before_count, p.after_count), (5, 3))
+        self.assertEqual((p.held_count, p.held_size), (1, 1))
+        self.assertEqual([(os.path.basename(d.path), d.count, d.new) for d in p.destinations],
+                         [("Pictures", 2, True), ("Documents", 1, True)])
+
+    def test_move_item_between_groups(self):
+        self.make("a.png", b"1", age_days=2)
+        self.make("b.pdf", b"2", age_days=2)
+        plan = self.plan()
+        pics, docs = self.group(plan, "sort:Pictures"), self.group(plan, "sort:Documents")
+        docs.enabled = False
+        plan.move_item(pics.items[0], docs)
+        self.assertEqual(pics.items, [])
+        self.assertTrue(docs.enabled)
+        self.assertEqual(sorted(os.path.basename(i.path) for i in docs.items), ["a.png", "b.pdf"])
+        self.history.apply(plan)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.dir, "Documents"))), [".tidy-folder", "a.png", "b.pdf"])
+
+    def test_largest(self):
+        self.make("big.bin", b"x" * 5000, age_days=2)
+        self.make("dir/a.bin", b"y" * 3000, age_days=2)
+        self.make("small.bin", b"z", age_days=2)
+        self.assertEqual([(os.path.basename(p), n) for p, n, _ in self.plan().largest],
+                         [("big.bin", 5000), ("dir", 3000), ("small.bin", 1)])
+
+
 class Ops(Base):
     def test_move_never_clobbers(self):
         a = self.make("a.txt", b"a")
@@ -149,9 +212,9 @@ class Roundtrip(Base):
         self.setup_mess()
         before = sorted(os.listdir(self.dir))
         res = self.history.apply(self.plan())
-        self.assertEqual(res.done, 3)
-        self.assertEqual(sorted(os.listdir(self.dir)), ["Archive", "photo.jpg"])
-        self.assertEqual(self.history.undo(res.run).done, 3)
+        self.assertEqual(res.done, 4)
+        self.assertEqual(sorted(os.listdir(self.dir)), ["Archive", "Pictures"])
+        self.assertEqual(self.history.undo(res.run).done, 4)
         self.assertEqual(sorted(os.listdir(self.dir)), before)
         self.assertEqual(os.listdir(self.history.holding), [])
 
@@ -188,7 +251,7 @@ class Roundtrip(Base):
         res = self.history.apply(self.plan())
         self.assertEqual(self.history.purge(now=time.time() + 31 * DAY), 2)
         statuses = {os.path.basename(m["src"]): m["status"] for m in self.history.moves(res.run)}
-        self.assertEqual(statuses, {"photo (1).jpg": "expired", "setup.AppImage": "expired", "old.txt": "moved"})
+        self.assertEqual(statuses, {"photo (1).jpg": "expired", "setup.AppImage": "expired", "old.txt": "moved", "photo.jpg": "moved"})
         self.assertEqual(os.listdir(self.history.holding), [])
 
     def test_recover_interrupted_move(self):
