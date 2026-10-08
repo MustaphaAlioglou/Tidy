@@ -564,11 +564,17 @@ class WatchDialog(Adw.PreferencesDialog):
         prefs = Adw.PreferencesPage()
         self.add(prefs)
 
-        self.switch = Adw.SwitchRow(title="Watch Folders",
-                                    subtitle="Tidy checks these folders now and then and starts with your session",
-                                    active=self.settings.enabled)
-        self.switch.connect("notify::active", self.toggled)
-        prefs.add(boxed_rows(None, [self.switch]))
+        self.status = Adw.ActionRow(title="Watcher")
+        self.button = Gtk.Button(valign=Gtk.Align.CENTER)
+        self.button.connect("clicked", lambda *_: self.start_stop())
+        self.status.add_suffix(self.button)
+        self.autostart = Adw.SwitchRow(title="Start When I Log In", active=self.settings.autostart)
+        self.autostart.connect("notify::active", lambda r, _p: setattr(self.settings, "autostart", r.get_active()))
+        prefs.add(boxed_rows(None, [self.status, self.autostart]))
+        self.busy = False
+        self.show_status()
+        self.timer = GLib.timeout_add_seconds(2, lambda: self.show_status() or True)
+        self.connect("closed", lambda *_: GLib.source_remove(self.timer))
 
         self.folder_group = Adw.PreferencesGroup(
             title="Folders", description="You get a notification when enough new files pile up in one of these.")
@@ -613,10 +619,33 @@ class WatchDialog(Adw.PreferencesDialog):
             self.folder_group.add(row)
             self.rows.append(row)
 
-    def toggled(self, switch, _pspec):
-        if switch.get_active() != self.settings.enabled:
-            self.settings.enabled = switch.get_active()
+    def show_status(self):
+        if self.busy:
+            return
+        running = self.settings.running
+        self.status.set_subtitle("Running. Checks your folders now and then." if running
+                                 else "Stopped. No notifications until you start it.")
+        self.button.set_label("Stop" if running else "Start")
+        self.button.set_css_classes(["destructive-action"] if running else ["suggested-action"])
+        self.button.set_sensitive(True)
+        if self.autostart.get_active() != self.settings.autostart:
+            self.autostart.set_active(self.settings.autostart)
+
+    def start_stop(self):
+        running = self.settings.running
+        self.busy = True
+        self.button.set_sensitive(False)
+        self.status.set_subtitle("Stopping…" if running else "Starting…")
+
+        def done(_):
+            self.busy = False
+            self.show_status()
             self.fill()
+
+        def failed(e):
+            done(None)
+            self.win.alert("Could Not Start Watching" if not running else "Could Not Stop Watching", str(e))
+        run_async(self.settings.stop if running else self.settings.start, done, failed)
 
     def add_folder(self, path):
         try:

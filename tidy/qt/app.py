@@ -476,11 +476,23 @@ class WatchDialog(QDialog):
         self.resize(560, 480)
         layout = QVBoxLayout(self)
 
-        self.enabled = QCheckBox("Watch folders and tell me when they need tidying")
-        self.enabled.setChecked(self.settings.enabled)
-        self.enabled.toggled.connect(self.toggled)
-        layout.addWidget(self.enabled)
-        layout.addWidget(dim(QLabel("Tidy checks now and then and starts with your session. Only rules that end "
+        row = QHBoxLayout()
+        self.status = QLabel()
+        self.button = QPushButton()
+        self.button.clicked.connect(self.start_stop)
+        row.addWidget(self.status, 1)
+        row.addWidget(self.button)
+        layout.addLayout(row)
+        self.autostart = QCheckBox("Start when I log in")
+        self.autostart.setChecked(self.settings.autostart)
+        self.autostart.toggled.connect(lambda on: setattr(self.settings, "autostart", on))
+        layout.addWidget(self.autostart)
+        self.busy = False
+        self.timer = QTimer(self, interval=2000)
+        self.timer.timeout.connect(self.show_status)
+        self.timer.start()
+        self.show_status()
+        layout.addWidget(dim(QLabel("Only rules that end "
                                     "in \u201cautomatically\u201d move files without asking.", wordWrap=True)))
 
         box = QGroupBox("Folders")
@@ -528,10 +540,33 @@ class WatchDialog(QDialog):
     def update_buttons(self):
         self.remove.setEnabled(bool(self.list.selectedItems()))
 
-    def toggled(self, on):
-        if on != self.settings.enabled:
-            self.settings.enabled = on
+    def show_status(self):
+        if self.busy:
+            return
+        running = self.settings.running
+        self.status.setText("<b>Watcher is running.</b> It checks your folders now and then." if running
+                            else "<b>Watcher is stopped.</b> No notifications until you start it.")
+        self.button.setText("Stop" if running else "Start")
+        self.button.setIcon(icon("media-playback-stop" if running else "media-playback-start"))
+        self.button.setEnabled(True)
+        if self.autostart.isChecked() != self.settings.autostart:
+            self.autostart.setChecked(self.settings.autostart)
+
+    def start_stop(self):
+        running = self.settings.running
+        self.busy = True
+        self.button.setEnabled(False)
+        self.status.setText("Stopping…" if running else "Starting…")
+
+        def done(_):
+            self.busy = False
+            self.show_status()
             self.fill()
+
+        def failed(e):
+            done(None)
+            QMessageBox.warning(self, "Could Not Stop Watching" if running else "Could Not Start Watching", str(e))
+        run_async(self.settings.stop if running else self.settings.start, done, failed)
 
     def add_folder(self, path):
         try:

@@ -87,13 +87,18 @@ Watch Downloads and Desktop, and tell me after 30 new files
 
 ### Watch mode
 
-Turn it on from **Watch Folders…** in the app's main menu, or with
-`tidy-cli watch --on`. Either way, a small background watcher starts and is
-added to your session's autostart. In the app you can also add or remove
-watched folders, set how many new files trigger a notification, and set how
-often it checks. The app saves these as the `Watch` line in your rules file,
-and the watcher picks up changes within half a minute. Every 15 minutes it looks at the folders in your `Watch`
-lines (Downloads if there are none):
+Open **Watch Folders…** from the app's main menu. There you can:
+
+- start or stop the watcher;
+- choose whether it starts when you log in;
+- add or remove watched folders;
+- set how many new files trigger a notification, and how often it checks.
+
+The app saves these as the `Watch` line in your rules file, and the watcher
+picks up changes within half a minute.
+
+By default the watcher looks at your watched folders every 15 minutes
+(Downloads if you haven't added any):
 
 - **Notifications.** When enough new files have arrived (20 by default), it
   sends one notification: "47 new files in Downloads. Tidy up?". Clicking
@@ -103,8 +108,13 @@ lines (Downloads if there are none):
   (or start with *Always*) move files without asking. Each automatic run is in
   Tidy History, and its notification has an **Undo** button.
 
-To stop it, run `tidy-cli watch --off`. To see whether it's running, run
-`tidy-cli watch --status`.
+From the terminal:
+
+- `tidy-cli watch --start` and `--stop` start or stop the watcher now, leaving
+  the login setting alone.
+- `--on` and `--off` do both at once: start or stop it, and turn starting at
+  login on or off.
+- `--status` shows whether it's running and whether it starts at login.
 
 The **What's Big** tab shows which items take up the most space.
 
@@ -183,7 +193,8 @@ tidy-cli purge                    # expire held items older than 30 days now
 tidy-cli forget                   # clear learned destinations and name patterns
 tidy-cli rules                    # show your rules and how Tidy reads them
 tidy-cli rules --add "Hold installers older than 2 weeks"
-tidy-cli watch --on               # watch folders and notify (also --off, --status)
+tidy-cli watch --on               # watch now and at login (--off undoes both)
+tidy-cli watch --start            # start/stop now only (--stop); --status shows both
 ```
 
 ## Tested distributions

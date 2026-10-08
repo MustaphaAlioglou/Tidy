@@ -12,6 +12,10 @@ Added
   * Folder names in Watch lines can be quoted, so names with spaces,
     commas or "and" work.
 
+  * Start and stop the watcher separately from starting at login: a
+    Start/Stop button and a "Start when I log in" switch in Watch Folders,
+    and tidy-cli watch --start/--stop. --on/--off still do both.
+
 Changed
   * The watcher notices edits to rules.txt within half a minute instead
     of waiting for its next check.

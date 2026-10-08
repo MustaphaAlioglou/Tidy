@@ -182,45 +182,84 @@ def _sleep(seconds, step=30):
             return
 
 
-def enable():
-    """Start watching now and with every session. With no watched folders
-    yet, Downloads is added."""
+def _wait(cond, timeout=3):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return cond()
+
+
+def start(wait=True):
+    """Start the watcher in the background now, if it isn't running. With no
+    watched folders yet, Downloads is added. Returns its pid."""
     ruleset = sentences.load()
     if not ruleset.watch.folders:
         ruleset.watch.folders = ["Downloads"]
         sentences.save_watch(ruleset.watch)
+    pid = running_pid()
+    if pid:
+        return pid
+    os.makedirs(data_dir(), exist_ok=True)
+    with open(os.path.join(data_dir(), "watch.log"), "a") as log:
+        subprocess.Popen([_launcher("tidy-cli"), "watch"], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    if wait:
+        _wait(running_pid)
+    return running_pid()
+
+
+def stop(wait=True):
+    """Stop the running watcher. Returns the pid that was stopped, or None."""
+    pid = running_pid()
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return None
+        if wait:
+            _wait(lambda: running_pid() is None)
+    return pid
+
+
+def is_enabled():
+    """Whether the watcher starts with the session."""
+    return os.path.exists(autostart_path())
+
+
+def set_autostart(on):
     path = autostart_path()
+    if not on:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         fh.write("[Desktop Entry]\nType=Application\nName=Tidy Watch\n"
                  "Comment=Tells you when watched folders need tidying\n"
                  f'Exec="{_launcher("tidy-cli")}" watch\nIcon=edit-clear-all\n'
                  "NoDisplay=true\nX-GNOME-Autostart-enabled=true\n")
-    if not running_pid():
-        os.makedirs(data_dir(), exist_ok=True)
-        log = open(os.path.join(data_dir(), "watch.log"), "a")
-        subprocess.Popen([_launcher("tidy-cli"), "watch"], start_new_session=True,
-                         stdin=subprocess.DEVNULL, stdout=log, stderr=log)
 
 
-def is_enabled():
-    return os.path.exists(autostart_path())
+def enable():
+    """Start watching now and with every session."""
+    set_autostart(True)
+    return start()
 
 
 def disable():
-    try:
-        os.unlink(autostart_path())
-    except FileNotFoundError:
-        pass
-    pid = running_pid()
-    if pid:
-        os.kill(pid, signal.SIGTERM)
-    return pid
+    """Stop watching now and don't start with the session."""
+    set_autostart(False)
+    return stop()
 
 
 class WatchSettings:
     """What the settings screens edit: the watched folders, how many new
-    files make a notification, how often to look, and whether watching is on."""
+    files make a notification, how often to look, whether the watcher is
+    running, and whether it starts with the session."""
 
     def __init__(self):
         self.watch = sentences.load().watch
@@ -262,16 +301,23 @@ class WatchSettings:
         self._save()
 
     @property
-    def enabled(self):
+    def running(self):
+        return running_pid() is not None
+
+    def start(self):
+        start()
+        self.watch = sentences.load().watch
+
+    def stop(self):
+        stop()
+
+    @property
+    def autostart(self):
         return is_enabled()
 
-    @enabled.setter
-    def enabled(self, on):
-        if on:
-            enable()
-            self.watch = sentences.load().watch
-        else:
-            disable()
+    @autostart.setter
+    def autostart(self, on):
+        set_autostart(on)
 
     def _save(self):
         sentences.save_watch(self.watch)

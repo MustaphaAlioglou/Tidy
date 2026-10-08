@@ -83,6 +83,29 @@ def rules_text():
         return fh.read()
 
 
+class FakeWatcher:
+    """Stands in for WatchSettings' start/stop so GUI tests never launch a
+    real watcher."""
+
+    def __init__(self, real):
+        self.real, self.running, self.autostart = real, False, False
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    def __setattr__(self, name, value):
+        if name in ("real", "running", "autostart"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.real, name, value)
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+
 class QtFrontend(Frontend, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -132,7 +155,17 @@ class QtFrontend(Frontend, unittest.TestCase):
         orig = q.QMessageBox.information
         q.QMessageBox.information = staticmethod(lambda *a: shown.append(a[1]))
         try:
-            dialog = q.WatchDialog(win)
+            from tidy.watch import WatchSettings
+            fake = FakeWatcher(WatchSettings())
+            dialog = q.WatchDialog(win, fake)
+            self.assertEqual(dialog.button.text(), "Start")
+            dialog.button.click()
+            self.wait(lambda: dialog.button.text() == "Stop", "the watcher to start")
+            self.assertTrue(fake.running)
+            dialog.button.click()
+            self.wait(lambda: dialog.button.text() == "Start", "the watcher to stop")
+            dialog.autostart.setChecked(True)
+            self.assertTrue(fake.autostart)
             self.assertEqual(dialog.list.count(), 0)
             dialog.add_folder(self.folder)
             dialog.add_folder(os.path.expanduser("~"))
@@ -222,9 +255,18 @@ class GtkFrontend(Frontend, unittest.TestCase):
         alerts = []
         win.alert = lambda heading, body: alerts.append(heading)
         win.present()
-        dialog = g.WatchDialog(win)
+        from tidy.watch import WatchSettings
+        fake = FakeWatcher(WatchSettings())
+        dialog = g.WatchDialog(win, fake)
         dialog.present(win)
         self.pump()
+        self.assertEqual(dialog.button.get_label(), "Start")
+        dialog.button.emit("clicked")
+        self.wait(lambda: dialog.button.get_label() == "Stop", "the watcher to start")
+        dialog.button.emit("clicked")
+        self.wait(lambda: dialog.button.get_label() == "Start", "the watcher to stop")
+        dialog.autostart.set_active(True)
+        self.assertTrue(fake.autostart)
         dialog.add_folder(self.folder)
         dialog.add_folder(os.path.expanduser("~"))
         self.assertEqual(alerts, ["Tidy Can't Watch This Folder"])

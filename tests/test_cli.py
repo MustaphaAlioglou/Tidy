@@ -238,15 +238,31 @@ class WatchSettingsModel(Isolated):
         self.assertEqual(watch.WatchSettings().folders(), [])
         self.assertTrue(dl)
 
-    def test_turning_on_adds_downloads(self):
+    def test_start_stop_and_autostart_are_separate(self):
         self.folder("Downloads")
         ws = watch.WatchSettings()
-        with mock.patch.object(watch.subprocess, "Popen"):
-            ws.enabled = True
-        self.assertTrue(ws.enabled)
-        self.assertEqual([n for n, _ in ws.folders()], ["Downloads"])
-        ws.enabled = False
-        self.assertFalse(watch.WatchSettings().enabled)
+        self.assertFalse(ws.running)
+        ws.start()
+        self.addCleanup(watch.stop)
+        self.assertTrue(ws.running, "the watcher process is up")
+        self.assertFalse(ws.autostart, "starting doesn't touch autostart")
+        self.assertEqual([n for n, _ in ws.folders()], ["Downloads"], "starting adds Downloads when empty")
+        ws.autostart = True
+        self.assertTrue(os.path.exists(watch.autostart_path()))
+        ws.stop()
+        self.assertFalse(ws.running)
+        self.assertTrue(ws.autostart, "stopping keeps autostart")
+        ws.autostart = False
+        self.assertFalse(os.path.exists(watch.autostart_path()))
+
+    def test_cli_start_stop(self):
+        self.folder("Downloads")
+        self.addCleanup(watch.stop)
+        self.assertIn("Started (pid", self.cli("watch", "--start")[1])
+        self.assertIn("Already running", self.cli("watch", "--start")[1])
+        self.assertIn("starts with session: no", self.cli("watch", "--status")[1])
+        self.assertEqual(self.cli("watch", "--stop")[1].strip(), "Stopped.")
+        self.assertEqual(self.cli("watch", "--stop")[1].strip(), "Not running.")
 
 
 class Install(Isolated):

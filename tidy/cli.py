@@ -73,6 +73,14 @@ def _watch(args):
     elif args.off:
         pid = watch.disable()
         print("Stopped watching." if pid else "Watching was not running; autostart is off.")
+    elif args.start:
+        was = watch.running_pid()
+        pid = watch.start()
+        print(f"Already running (pid {pid})." if was else
+              f"Started (pid {pid})." if pid else "tidy: the watcher did not start; see ~/.local/share/tidy/watch.log")
+        return 0 if pid else 1
+    elif args.stop:
+        print("Stopped." if watch.stop() else "Not running.")
     elif args.status:
         pid = watch.running_pid()
         auto = watch.is_enabled()
@@ -103,6 +111,8 @@ def main(argv=None):
     mode = w.add_mutually_exclusive_group()
     mode.add_argument("--on", action="store_true", help="start now and with every session")
     mode.add_argument("--off", action="store_true", help="stop, and don't start with the session")
+    mode.add_argument("--start", action="store_true", help="start in the background now (autostart unchanged)")
+    mode.add_argument("--stop", action="store_true", help="stop now (autostart unchanged)")
     mode.add_argument("--status", action="store_true")
     mode.add_argument("--once", action="store_true", help="check once and exit")
     args = p.parse_args(argv)
