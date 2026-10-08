@@ -11,6 +11,7 @@ from .kinds import ARCHIVES, DOCUMENTS, MUSIC, ORDER, PICTURES, VIDEOS, kind_of
 from .learn import Learned, signature
 from .packages import installed_packages, package_name
 from .plan import HOLD, HOLD_DAYS, MOVE, Group, Item, Plan
+from .safety import dest_problem
 from .scan import Cancelled
 
 INSTALLER_EXT = (".pkg.tar.zst", ".pkg.tar.xz", ".appimage", ".deb", ".rpm", ".flatpak",
@@ -103,7 +104,7 @@ def _keeper(cluster):
     return min(cluster, key=lambda f: (f.depth == 0, _looks_like_copy(f.name), f.mtime, len(f.name)))
 
 
-def build_plan(res, settings=None, now=None, installed=None, cancel=None, learned=None):
+def build_plan(res, settings=None, now=None, installed=None, cancel=None, learned=None, user_rules=()):
     s = settings or Settings()
     learned = learned or Learned()
     now = now or time.time()
@@ -119,6 +120,22 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None, learne
 
     top_files = [f for f in res.files if f.depth == 0 and not fresh(f)]
     top_dirs = {d.name.lower(): d for d in res.dirs}
+    held = f"Removed items wait in the holding area for {HOLD_DAYS} days before they expire."
+
+    yours, notes = [], []
+    for rule in user_rules:
+        if not rule.applies_to(folder):
+            continue
+        dest = rule.destination(folder)
+        problem = dest and dest_problem(dest, folder)
+        if problem:
+            notes.append(f'Skipped "{rule.text}": files can\'t go to {dest} because {problem}.')
+            continue
+        items = [item(f, f"Your rule, {fmt.ago(f.mtime, now)}") for f in top_files
+                 if f.path not in claimed and rule.matches(f, now)]
+        how = " Tidies on its own in watched folders." if rule.auto else ""
+        yours.append(Group(f"rule:{rule.line}", rule.text, f"Your rule.{how}" + ("" if dest else f" {held}"),
+                           MOVE if dest else HOLD, items, dest=dest, auto=rule.auto))
 
     clutter = []
     for f in top_files:
@@ -190,8 +207,7 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None, learne
         elif kind:
             sortable.setdefault(f"sort:{kind}", []).append(item(f, f"{kind_label(kind)}, {fmt.ago(f.mtime, now)}"))
 
-    held = f"Removed items wait in the holding area for {HOLD_DAYS} days before they expire."
-    groups = [
+    groups = yours + [
         Group("clutter", "Clutter", f"Unfinished downloads, empty folders and archives you already extracted. {held}", HOLD, clutter),
         Group("duplicates", "Duplicates", f"Extra copies of files that exist elsewhere in this folder. The original stays. {held}", HOLD, dupes),
         Group("installers", "Installers", f"Packages that are already installed or were downloaded a while ago. {held}", HOLD, installers),
@@ -211,7 +227,7 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None, learne
     largest = [(e.path, e.size, e.is_dir) for e in sorted(top, key=lambda e: -e.size)[:20] if e.size]
     return Plan(folder, len(res.files), sum(f.size for f in res.files),
                 [g for g in groups if g.items], list(res.skipped),
-                top_count=len(top) + len(top_skipped), largest=largest)
+                top_count=len(top) + len(top_skipped), largest=largest, notes=notes)
 
 
 def _known(fam):

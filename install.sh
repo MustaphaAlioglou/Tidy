@@ -23,8 +23,11 @@ fi
 mkdir -p "$BIN" "$APPS"
 ln -sf "$DIR/bin/tidy" "$BIN/tidy"
 ln -sf "$DIR/bin/tidy-cli" "$BIN/tidy-cli"
-install -m644 "$DIR/data/app.tidy.Tidy.desktop" "$APPS/app.tidy.Tidy.desktop"
+# Full path: the desktop session's PATH often lacks ~/.local/bin.
+sed "s|^Exec=tidy |Exec=\"$BIN/tidy\" |" "$DIR/data/app.tidy.Tidy.desktop" > "$APPS/app.tidy.Tidy.desktop"
+chmod 644 "$APPS/app.tidy.Tidy.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
+command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
 echo "Installed. Run 'tidy', or find Tidy in your app menu."
 [ $ok_gtk = 1 ] || echo "note: GTK frontend unavailable, Qt will be used everywhere"
 [ $ok_qt = 1 ] || echo "note: Qt frontend unavailable, GTK will be used everywhere"

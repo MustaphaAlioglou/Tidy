@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS learned_dests (
     template TEXT NOT NULL,
     at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watched (
+    folder TEXT PRIMARY KEY,
+    since REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS learned_names (
     signature TEXT PRIMARY KEY,
     family TEXT NOT NULL,
@@ -129,12 +133,14 @@ class History:
         now = time.time()
         with self._db() as db:
             for g in plan.groups:
+                if g.key.startswith("rule:"):
+                    continue
                 if g.action == MOVE and g.selected and g.dest != g.suggested:
                     db.execute("INSERT OR REPLACE INTO learned_dests VALUES (?,?,?)",
                                (family(g.key), to_template(g.dest, plan.folder, g.year), now))
             for g, i in plan.selected:
                 sig = signature(os.path.basename(i.path))
-                if g.action == MOVE and i.origin != g.key and sig:
+                if g.action == MOVE and i.origin != g.key and sig and not g.key.startswith("rule:"):
                     db.execute("INSERT OR REPLACE INTO learned_names VALUES (?,?,?)", (sig, family(g.key), now))
 
     def learned(self):
@@ -148,6 +154,23 @@ class History:
             n = db.execute("DELETE FROM learned_dests").rowcount
             n += db.execute("DELETE FROM learned_names").rowcount
         return n
+
+    def watched_since(self, folder, now=None):
+        """When the watcher last told you about this folder, or you last
+        tidied it. The first call starts the clock."""
+        with self._db() as db:
+            row = db.execute("SELECT since FROM watched WHERE folder=?", (folder,)).fetchone()
+            if row is None:
+                since = now or time.time()
+                db.execute("INSERT INTO watched VALUES (?,?)", (folder, since))
+            else:
+                since = row["since"]
+            last = db.execute("SELECT MAX(started) FROM runs WHERE folder=?", (folder,)).fetchone()[0]
+        return max(since, last or 0)
+
+    def set_watched_since(self, folder, since):
+        with self._db() as db:
+            db.execute("INSERT OR REPLACE INTO watched VALUES (?,?)", (folder, since))
 
     def apply(self, plan, progress=None, cancel=None):
         todo = plan.selected

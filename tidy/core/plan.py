@@ -28,6 +28,7 @@ class Group:
     enabled: bool = True
     year: int | None = None
     suggested: str | None = None
+    auto: bool = False
 
     def __post_init__(self):
         self.suggested = self.suggested or self.dest
@@ -71,6 +72,7 @@ class Plan:
     skipped: list = field(default_factory=list)
     top_count: int = 0
     largest: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
 
     @property
     def selected(self):

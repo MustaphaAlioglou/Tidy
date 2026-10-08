@@ -55,6 +55,53 @@ falls back to the other one.
 
 Run `tidy-cli forget` to clear what it learned.
 
+## Your rules
+
+Write rules as plain sentences in `~/.config/tidy/rules.txt`, one per line,
+or add them with `tidy-cli rules --add "..."`:
+
+```
+Move PDFs older than 30 days from Downloads to Documents/Old PDFs
+Put screenshots in Pictures/Screenshots automatically
+Hold installers older than 2 weeks
+Move files named "*.torrent" to Torrents
+Watch Downloads and Desktop, and tell me after 30 new files
+```
+
+- **The pattern:** a verb, then which files, then optional parts.
+  - **Verbs:** *Move*, *Put*, *File*, *Send* or *Sort*. Or *Hold*, *Remove*,
+    *Delete* or *Get rid of*, which all go to the holding area. Nothing is
+    ever deleted outright.
+  - **Which files:** pictures, documents, music, videos, archives,
+    screenshots, receipts, tax documents, installers, extensions such as
+    `PDFs` or `jpg files`, or `files named "*.iso"`.
+  - **Optional parts:** `from <folder>`, `older than <n> days/weeks/months/years`,
+    `to <folder>`, and `automatically`.
+- **Destinations:** a folder that exists in your home folder (such as
+  `Documents/Old PDFs`) goes there. Any other name is created inside the folder
+  being tidied.
+- **Checking them:** `tidy-cli rules` shows how Tidy reads each line and
+  explains any it can't read.
+- **Priority:** your rules come before Tidy's own groups and show up in the
+  plan like any other group.
+
+### Watch mode
+
+`tidy-cli watch --on` starts a small background watcher and adds it to your
+session's autostart. Every 15 minutes it looks at the folders in your `Watch`
+lines (Downloads if there are none):
+
+- **Notifications.** When enough new files have arrived (20 by default), it
+  sends one notification: "47 new files in Downloads. Tidy up?". Clicking
+  **Tidy Up** opens the plan. It doesn't ask again until more new files
+  arrive.
+- **Auto-tidy is opt-in per rule.** Only rules that end in *automatically*
+  (or start with *Always*) move files without asking. Each automatic run is in
+  Tidy History, and its notification has an **Undo** button.
+
+To stop it, run `tidy-cli watch --off`. To see whether it's running, run
+`tidy-cli watch --status`.
+
 The **What's Big** tab shows which items take up the most space.
 
 <p align="center">
@@ -130,6 +177,9 @@ tidy-cli undo 3                   # undo run 3
 tidy-cli undo --move 41           # put back a single file
 tidy-cli purge                    # expire held items older than 30 days now
 tidy-cli forget                   # clear learned destinations and name patterns
+tidy-cli rules                    # show your rules and how Tidy reads them
+tidy-cli rules --add "Hold installers older than 2 weeks"
+tidy-cli watch --on               # watch folders and notify (also --off, --status)
 ```
 
 ## Tested distributions
@@ -146,7 +196,7 @@ distribution, using that distribution's packaged GTK, libadwaita and PySide6:
 | Arch Linux | 3.14 | ✅ | ✅ | ✅ |
 | openSUSE Tumbleweed | 3.13 | ✅ | ✅ | ✅ |
 
-Last run: 2026-10-07. Mint, Pop!_OS and Zorin use Ubuntu's packages,
+Last run: 2026-10-08. Mint, Pop!_OS and Zorin use Ubuntu's packages,
 and Manjaro and EndeavourOS use Arch's. Ubuntu 24.04 (and Kubuntu 24.04) has no
 PySide6 package, so it uses the GTK frontend everywhere.
 
@@ -160,6 +210,12 @@ tests/distro/run.sh fedora:latest                # just one
 
 - **`tests/test_core.py`** covers the rules, the safety checks, no-clobber
   moves, apply and undo round trips, expiry and crash recovery.
+- **`tests/test_watch.py`** covers the sentence parser, rules in plans, and
+  the watcher: when it notifies, auto-tidy, and Undo.
+- **`tests/test_cli.py`** runs every `tidy-cli` command in a throwaway home
+  folder. It also covers localised folder names, the destination safety
+  check, the single-watcher lock and autostart, and runs `install.sh` and
+  `uninstall.sh` for real.
 - **`tests/test_gui.py`** drives each frontend for real: it scans a messy
   folder, moves a file between groups, tidies, opens History and undoes, then
   checks the folder is byte-for-byte what it was. A frontend whose toolkit
@@ -180,6 +236,7 @@ tidy/core/     scanning, rules, plan, moves, history (stdlib only)
 tidy/gtk/      GTK4 + libadwaita frontend
 tidy/qt/       Qt 6 (PySide6) frontend
 tidy/cli.py    tidy-cli
+tidy/watch.py  watch mode and notifications
 tidy/__main__  picks a frontend
 tests/         unit, GUI and distribution tests
 ```
@@ -189,8 +246,9 @@ tests/         unit, GUI and distribution tests
 - **v0.3:** ✅ content-aware groups (screenshots, receipts, tax documents)
   with suggested names such as "Receipts 2026", and learning from where you
   move things.
-- **v0.4:** watch mode with gentle notifications ("47 new files. Tidy up?"),
-  and rules written as plain sentences. Nothing moves without asking unless
-  you turn on auto-tidy for a rule.
+- **v0.4:** ✅ watch mode with gentle notifications ("47 new files. Tidy
+  up?"), and rules written as plain sentences. Nothing moves without asking
+  unless you turn on auto-tidy for a rule.
+- **Next:** editing rules and turning watch mode on from the app itself.
 
 See [CHANGELOG.txt](CHANGELOG.txt) for what changed in each version.

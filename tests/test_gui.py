@@ -50,6 +50,7 @@ class Frontend:
         make_mess(self.folder)
         self.before = snapshot(self.folder)
         self.history = History(os.path.join(self.tmp, "data"))
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.tmp, "config")
 
     def tearDown(self):
         shutil.rmtree(self.tmp)

@@ -11,7 +11,7 @@ py() { /usr/bin/python3 -W ignore::DeprecationWarning "$@"; }
 probe() { out=$(py -c "import tidy.$1.app" 2>&1) || { echo "$out" | tail -1; return 1; }; }
 
 core=fail; gtk=fail; qt=fail; cli=fail; install=fail
-py -m unittest tests.test_core 2>&1 | tail -3 && py -m unittest tests.test_core >/dev/null 2>&1 && core=pass
+py -m unittest tests.test_core tests.test_watch tests.test_cli 2>&1 | tail -3 && py -m unittest tests.test_core tests.test_watch tests.test_cli >/dev/null 2>&1 && core=pass
 
 if err=$(probe gtk); then
     py -m unittest -v tests.test_gui.GtkFrontend 2>&1 | grep -E "\.\.\. |^(OK|FAILED)|Error|assert" && \

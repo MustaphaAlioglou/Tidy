@@ -1,6 +1,30 @@
 Tidy changelog
 ==============
 
+0.4.0 (2026-10-08)
+------------------
+
+Added
+  * Rules written as plain sentences in ~/.config/tidy/rules.txt, such as
+    "Move PDFs older than 30 days from Downloads to Documents/Old PDFs".
+    They come before Tidy's own groups. tidy-cli rules shows how each
+    line is read and explains the ones it can't read; --add appends one.
+  * Watch mode (tidy-cli watch --on/--off/--status). A background watcher
+    started with the session checks the folders named in "Watch ..." lines
+    and sends one notification when enough new files have arrived
+    ("47 new files in Downloads. Tidy up?"). It doesn't ask again until
+    more arrive.
+  * Auto-tidy, opt-in per rule: only rules ending in "automatically" move
+    files without asking, and only in watched folders. Each run is in
+    History and its notification has an Undo button.
+  * Rules whose destination is outside your home folder, hidden, or the
+    folder itself are skipped, and the plan says why.
+
+Fixed
+  * The app menu entry failed to launch on KDE ("Could not find the
+    program 'tidy'") because the session's PATH lacks ~/.local/bin.
+    install.sh now writes the full path and refreshes KDE's menu cache.
+
 0.3.0 (2026-10-08)
 ------------------
 

@@ -33,6 +33,22 @@ def protected_reason(path):
     return None
 
 
+def dest_problem(dest, folder):
+    """Why files may not be moved into dest, or None."""
+    real = os.path.realpath(dest)
+    home = os.path.realpath(os.path.expanduser("~"))
+    if real == os.path.realpath(folder):
+        return "it is the folder being tidied"
+    if _under(real, home) and real != home:
+        rel = os.path.relpath(real, home)
+        if any(part.startswith(".") for part in rel.split(os.sep)):
+            return "it is a hidden folder"
+        return None
+    if any(_under(real, r) for r in REMOVABLE_DIRS) and real not in REMOVABLE_DIRS:
+        return None
+    return "it is outside your home folder"
+
+
 def check_folder(path, allow_project=False):
     real = os.path.realpath(os.path.expanduser(path))
     home = os.path.realpath(os.path.expanduser("~"))
