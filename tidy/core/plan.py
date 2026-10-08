@@ -14,6 +14,7 @@ class Item:
     reason: str
     is_dir: bool = False
     enabled: bool = True
+    origin: str | None = None
 
 
 @dataclass
@@ -25,6 +26,13 @@ class Group:
     items: list = field(default_factory=list)
     dest: str | None = None
     enabled: bool = True
+    year: int | None = None
+    suggested: str | None = None
+
+    def __post_init__(self):
+        self.suggested = self.suggested or self.dest
+        for i in self.items:
+            i.origin = i.origin or self.key
 
     @property
     def size(self):

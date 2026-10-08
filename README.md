@@ -41,7 +41,19 @@ falls back to the other one.
 | Duplicates | byte-identical copies. Only top-level copies are removed, and a copy already filed in a subfolder is the one kept | holding area |
 | Installers | `.deb`, `.rpm` and `.pkg.tar.zst` packages that are already installed, or any installer older than 30 days | holding area |
 | Old Files | top-level files and folders not used in 6 months | moved to `Archive/` |
+| Screenshots, Receipts, Tax (per year) | screenshots by name; receipts, invoices and tax documents by name, or for PDFs by their text ("Invoice number", "Amount due", "Tax return"). The year comes from the name, else the file's date | moved to a folder such as `Receipts 2026` |
 | Pictures, Documents, Music, Videos, Archives | the remaining loose files, by extension, or by their first bytes when there is no extension | moved to a folder per type |
+
+**Tidy learns from you.** When you tidy, it remembers two things:
+
+- **Changed destinations.** If you send Pictures to `~/Pictures`, the next scan
+  suggests that again. For per-year groups, the year stays a placeholder, so
+  `Shots/2025` becomes `Shots/2026` next year.
+- **Files you dragged into another group.** It remembers the name pattern with
+  the numbers blanked out, so after you file `IMG_2041.jpg` under Receipts,
+  `IMG_2077.jpg` goes there too.
+
+Run `tidy-cli forget` to clear what it learned.
 
 The **What's Big** tab shows which items take up the most space.
 
@@ -117,6 +129,7 @@ tidy-cli history                  # past runs and every move
 tidy-cli undo 3                   # undo run 3
 tidy-cli undo --move 41           # put back a single file
 tidy-cli purge                    # expire held items older than 30 days now
+tidy-cli forget                   # clear learned destinations and name patterns
 ```
 
 ## Tested distributions
@@ -173,9 +186,9 @@ tests/         unit, GUI and distribution tests
 
 ## Roadmap
 
-- **v0.3:** content-aware groups (receipts, screenshots, tax documents) with
-  suggested names such as "Receipts 2026", and learning from where you move
-  things.
+- **v0.3:** ✅ content-aware groups (screenshots, receipts, tax documents)
+  with suggested names such as "Receipts 2026", and learning from where you
+  move things.
 - **v0.4:** watch mode with gentle notifications ("47 new files. Tidy up?"),
   and rules written as plain sentences. Nothing moves without asking unless
   you turn on auto-tidy for a rule.

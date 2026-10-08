@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "Could Not Scan", str(e))
 
-        run_async(lambda: make_plan(path, cancel, progress), done, failed)
+        run_async(lambda: make_plan(path, cancel, progress, history=self.history), done, failed)
 
     def apply(self, plan):
         self.busy.title.setText("Tidying…")

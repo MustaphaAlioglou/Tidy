@@ -183,7 +183,7 @@ class Window(Adw.ApplicationWindow):
             else:
                 self.alert("Could Not Scan", str(e))
 
-        run_async(lambda: make_plan(path, cancel, progress), done, failed)
+        run_async(lambda: make_plan(path, cancel, progress, history=self.history), done, failed)
 
     def apply(self, plan):
         status = Adw.StatusPage(title="Tidying…", child=spinner())

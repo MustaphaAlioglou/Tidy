@@ -6,7 +6,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from . import fmt
+from . import topics
 from .kinds import ARCHIVES, DOCUMENTS, MUSIC, ORDER, PICTURES, VIDEOS, kind_of
+from .learn import Learned, signature
 from .packages import installed_packages, package_name
 from .plan import HOLD, HOLD_DAYS, MOVE, Group, Item, Plan
 from .scan import Cancelled
@@ -101,8 +103,9 @@ def _keeper(cluster):
     return min(cluster, key=lambda f: (f.depth == 0, _looks_like_copy(f.name), f.mtime, len(f.name)))
 
 
-def build_plan(res, settings=None, now=None, installed=None, cancel=None):
+def build_plan(res, settings=None, now=None, installed=None, cancel=None, learned=None):
     s = settings or Settings()
+    learned = learned or Learned()
     now = now or time.time()
     folder = res.folder
     rel = lambda p: os.path.relpath(p, folder)
@@ -154,6 +157,14 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None):
         if older(f.mtime, s.installer_days):
             installers.append(item(f, f"Downloaded {fmt.ago(f.mtime, now)}"))
 
+    loose = [f for f in top_files if f.path not in claimed and not split_ext(f.name, INSTALLER_EXT + PARTIAL_EXT)]
+    taught = {}
+    for f in loose:
+        fam = learned.sigs.get(signature(f.name))
+        if fam and _known(fam):
+            key = f"{fam}:{topics.year_of(f.name, f.mtime, now)}" if fam.startswith("topic:") else fam
+            taught.setdefault(key, []).append(item(f, "You moved files like this here before"))
+
     old = []
     for f in top_files:
         if f.path not in claimed and older(f.last_used, s.old_days):
@@ -164,26 +175,35 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None):
                 and d.files and older(d.last_used, s.old_days)):
             old.append(item(d, f"Last used {fmt.ago(d.last_used, now)}"))
 
-    sortable = {}
-    for f in top_files:
-        if f.path in claimed or split_ext(f.name, INSTALLER_EXT + PARTIAL_EXT):
+    by_topic, sortable = {}, {}
+    for f in loose:
+        if f.path in claimed:
             continue
+        if cancel and cancel.is_set():
+            raise Cancelled
         kind = kind_of(f.path)
-        if kind:
-            sortable.setdefault(kind, []).append(item(f, f"{kind_label(kind)}, {fmt.ago(f.mtime, now)}"))
+        found = topics.topic_of(f.path, kind) if kind else None
+        if found:
+            topic, why = found
+            key = f"topic:{topic}:{topics.year_of(f.name, f.mtime, now)}"
+            by_topic.setdefault(key, []).append(item(f, f"{why}, {fmt.ago(f.mtime, now)}"))
+        elif kind:
+            sortable.setdefault(f"sort:{kind}", []).append(item(f, f"{kind_label(kind)}, {fmt.ago(f.mtime, now)}"))
 
     held = f"Removed items wait in the holding area for {HOLD_DAYS} days before they expire."
     groups = [
         Group("clutter", "Clutter", f"Unfinished downloads, empty folders and archives you already extracted. {held}", HOLD, clutter),
         Group("duplicates", "Duplicates", f"Extra copies of files that exist elsewhere in this folder. The original stays. {held}", HOLD, dupes),
         Group("installers", "Installers", f"Packages that are already installed or were downloaded a while ago. {held}", HOLD, installers),
-        Group("old", "Old Files", f"Not opened in {s.old_days // 30} months. Nothing is removed.",
-              MOVE, old, dest=os.path.join(folder, ARCHIVE_DIR)),
     ]
-    for kind in ORDER:
-        if kind in sortable:
-            groups.append(Group(f"sort:{kind}", kind, f"Loose {kind_label(kind).lower()} files, sorted into one folder.",
-                                MOVE, sortable[kind], dest=os.path.join(folder, kind)))
+    moves = {"old": old}
+    for t in topics.ORDER:
+        for key in sorted((k for k in by_topic if k.split(":")[1] == t), reverse=True):
+            moves[key] = by_topic[key]
+    moves.update((f"sort:{kind}", sortable[f"sort:{kind}"]) for kind in ORDER if f"sort:{kind}" in sortable)
+    for key, items in taught.items():
+        moves.setdefault(key, []).extend(items)
+    groups += [_move_group(key, items, folder, s, learned) for key, items in moves.items()]
     for g in groups:
         g.items.sort(key=lambda i: -i.size)
     top = [f for f in res.files if f.depth == 0] + res.dirs
@@ -192,6 +212,26 @@ def build_plan(res, settings=None, now=None, installed=None, cancel=None):
     return Plan(folder, len(res.files), sum(f.size for f in res.files),
                 [g for g in groups if g.items], list(res.skipped),
                 top_count=len(top) + len(top_skipped), largest=largest)
+
+
+def _known(fam):
+    kind, _, name = fam.partition(":")
+    return (fam == "old" or (kind == "sort" and name in ORDER)
+            or (kind == "topic" and name in topics.ORDER))
+
+
+def _move_group(key, items, folder, s, learned):
+    if key == "old":
+        return Group("old", "Old Files", f"Not opened in {s.old_days // 30} months. Nothing is removed.",
+                     MOVE, items, dest=learned.dest(key, folder, os.path.join(folder, ARCHIVE_DIR)))
+    kind, name, *year = key.split(":")
+    if kind == "sort":
+        return Group(key, name, f"Loose {kind_label(name).lower()} files, sorted into one folder.",
+                     MOVE, items, dest=learned.dest(key, folder, os.path.join(folder, name)))
+    year = int(year[0])
+    title = f"{name} {year}"
+    return Group(key, title, topics.DESCRIPTION[name].format(year=year), MOVE, items, year=year,
+                 dest=learned.dest(key, folder, os.path.join(folder, title), year))
 
 
 def kind_label(kind):

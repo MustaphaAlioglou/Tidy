@@ -6,9 +6,10 @@ from .safety import Protected, check_folder
 from .scan import Cancelled, scan
 
 APP_ID = "app.tidy.Tidy"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
-def make_plan(folder, cancel=None, progress=None, settings=None):
+def make_plan(folder, cancel=None, progress=None, settings=None, history=None):
     folder = check_folder(folder)
-    return build_plan(scan(folder, cancel, progress), settings, cancel=cancel)
+    learned = history.learned() if history else None
+    return build_plan(scan(folder, cancel, progress), settings, cancel=cancel, learned=learned)

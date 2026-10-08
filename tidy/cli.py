@@ -36,13 +36,14 @@ def main(argv=None):
     u.add_argument("run", type=int, nargs="?")
     u.add_argument("--move", type=int, action="append", default=[])
     sub.add_parser("purge", help=f"delete held items older than {HOLD_DAYS} days")
+    sub.add_parser("forget", help="forget the destinations and file patterns Tidy has learned")
     args = p.parse_args(argv)
     history = History()
 
     if args.cmd == "scan":
         folder = args.folder or (places()[0][1] if places() else ".")
         try:
-            plan = make_plan(folder)
+            plan = make_plan(folder, history=history)
         except Protected as e:
             sys.exit(f"tidy: {e}")
         _show_plan(plan)
@@ -66,6 +67,8 @@ def main(argv=None):
             print(f"  could not restore {path}: {why}")
     elif args.cmd == "purge":
         print(f"Expired {fmt.items(history.purge())}.")
+    elif args.cmd == "forget":
+        print(f"Forgot {fmt.items(history.forget())}.")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from . import ops
-from .plan import HOLD, HOLD_DAYS
+from .learn import Learned, family, signature, to_template
+from .plan import HOLD, HOLD_DAYS, MOVE
 from .safety import TIDY_MARKER
 
 SCHEMA = """
@@ -30,6 +31,16 @@ CREATE TABLE IF NOT EXISTS moves (
 );
 CREATE INDEX IF NOT EXISTS moves_run ON moves(run);
 CREATE INDEX IF NOT EXISTS moves_status ON moves(status);
+CREATE TABLE IF NOT EXISTS learned_dests (
+    family TEXT PRIMARY KEY,
+    template TEXT NOT NULL,
+    at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learned_names (
+    signature TEXT PRIMARY KEY,
+    family TEXT NOT NULL,
+    at REAL NOT NULL
+);
 """
 
 
@@ -112,8 +123,35 @@ class History:
             return "changed since the scan"
         return None
 
+    def learn(self, plan):
+        """Remember the choices made in an approved plan: destinations that
+        were changed, and files moved into a different group."""
+        now = time.time()
+        with self._db() as db:
+            for g in plan.groups:
+                if g.action == MOVE and g.selected and g.dest != g.suggested:
+                    db.execute("INSERT OR REPLACE INTO learned_dests VALUES (?,?,?)",
+                               (family(g.key), to_template(g.dest, plan.folder, g.year), now))
+            for g, i in plan.selected:
+                sig = signature(os.path.basename(i.path))
+                if g.action == MOVE and i.origin != g.key and sig:
+                    db.execute("INSERT OR REPLACE INTO learned_names VALUES (?,?,?)", (sig, family(g.key), now))
+
+    def learned(self):
+        with self._db() as db:
+            dests = dict(db.execute("SELECT family, template FROM learned_dests").fetchall())
+            sigs = dict(db.execute("SELECT signature, family FROM learned_names").fetchall())
+        return Learned(dests, sigs)
+
+    def forget(self):
+        with self._db() as db:
+            n = db.execute("DELETE FROM learned_dests").rowcount
+            n += db.execute("DELETE FROM learned_names").rowcount
+        return n
+
     def apply(self, plan, progress=None, cancel=None):
         todo = plan.selected
+        self.learn(plan)
         res = Result()
         with self._db() as db:
             res.run = db.execute("INSERT INTO runs(folder, started) VALUES (?, ?)",

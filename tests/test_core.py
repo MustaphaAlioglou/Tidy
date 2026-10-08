@@ -4,11 +4,13 @@ import sys
 import tempfile
 import time
 import unittest
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tidy.core import History, Protected, build_plan, check_folder, scan
 from tidy.core import ops
+from tidy.core.learn import signature
 from tidy.core.packages import package_name
 from tidy.core.rules import Settings
 
@@ -35,8 +37,8 @@ class Base(unittest.TestCase):
         os.utime(path, (t, t))
         return path
 
-    def plan(self, installed=()):
-        return build_plan(scan(self.dir), Settings(), now=self.now, installed=set(installed))
+    def plan(self, installed=(), learned=None):
+        return build_plan(scan(self.dir), Settings(), now=self.now, installed=set(installed), learned=learned)
 
     def group(self, plan, key):
         return next((g for g in plan.groups if g.key == key), None)
@@ -184,6 +186,109 @@ class Sorting(Base):
         self.make("small.bin", b"z", age_days=2)
         self.assertEqual([(os.path.basename(p), n) for p, n, _ in self.plan().largest],
                          [("big.bin", 5000), ("dir", 3000), ("small.bin", 1)])
+
+
+def pdf(text):
+    body = zlib.compress(b"BT /F1 12 Tf " + b" ".join(b"(%s) Tj" % w for w in text.split()) + b" ET")
+    return b"%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n" + body + b"\nendstream\nendobj\n%%EOF\n"
+
+
+class Topics(Base):
+    def test_screenshots_by_year_from_name(self):
+        self.make("Screenshot from 2025-03-01 10-00-00.png", b"a", age_days=2)
+        self.make("Screenshot_20261007_101500.png", b"b", age_days=2)
+        self.make("Στιγμιότυπο οθόνης 2026-01-02.png", b"c", age_days=2)
+        self.make("holiday.png", b"d", age_days=2)
+        plan = self.plan()
+        self.assertEqual(self.paths(plan, "topic:Screenshots:2025"), ["Screenshot from 2025-03-01 10-00-00.png"])
+        self.assertEqual(len(self.paths(plan, "topic:Screenshots:2026")), 2)
+        self.assertEqual(self.paths(plan, "sort:Pictures"), ["holiday.png"])
+        g = self.group(plan, "topic:Screenshots:2025")
+        self.assertEqual((g.title, g.dest), ("Screenshots 2025", os.path.join(self.dir, "Screenshots 2025")))
+
+    def test_receipts_and_tax_by_name(self):
+        self.make("Invoice-0042.pdf", b"x1", age_days=2)
+        self.make("amazon_receipt.jpg", b"x2", age_days=2)
+        self.make("tax-return-2024.pdf", b"x3", age_days=2)
+        self.make("W-2 2024.pdf", b"x4", age_days=2)
+        self.make("syntax notes.pdf", b"x5", age_days=2)
+        plan = self.plan()
+        year = time.localtime(self.now).tm_year
+        self.assertEqual(self.paths(plan, f"topic:Receipts:{year}"), ["Invoice-0042.pdf", "amazon_receipt.jpg"])
+        self.assertEqual(self.paths(plan, "topic:Tax:2024"), ["W-2 2024.pdf", "tax-return-2024.pdf"])
+        self.assertEqual(self.paths(plan, "sort:Documents"), ["syntax notes.pdf"])
+
+    def test_pdf_contents(self):
+        self.make("scan0001.pdf", pdf(b"ACME Ltd Invoice Number 1234 Amount Due 10.00"), age_days=2)
+        self.make("scan0002.pdf", pdf(b"Notes about invoices in general"), age_days=2)
+        plan = self.plan()
+        year = time.localtime(self.now).tm_year
+        self.assertEqual(self.paths(plan, f"topic:Receipts:{year}"), ["scan0001.pdf"])
+        self.assertEqual(self.paths(plan, "sort:Documents"), ["scan0002.pdf"])
+
+    def test_binary_pdf_is_quick(self):
+        noise = bytes((i * 7919) % 251 for i in range(1 << 20)).replace(b")", b"(")
+        self.make("photo-scan.pdf", b"%PDF-1.4\nstream\n" + noise + b"\nendstream\n", age_days=2)
+        start = time.time()
+        self.plan()
+        self.assertLess(time.time() - start, 2)
+
+
+class Learning(Base):
+    def apply_and_rescan(self, plan):
+        self.history.apply(plan)
+        for name in os.listdir(self.dir):
+            p = os.path.join(self.dir, name)
+            (shutil.rmtree if os.path.isdir(p) else os.unlink)(p)
+        return self.history.learned()
+
+    def test_signature(self):
+        self.assertEqual(signature("IMG_2041.JPG"), "img_#.jpg")
+        self.assertEqual(signature("report (2).pdf"), "report.pdf")
+        self.assertIsNone(signature("20261007.jpg"))
+
+    def test_learns_moved_files(self):
+        self.make("IMG_2041.jpg", b"a", age_days=2)
+        self.make("Invoice-1.pdf", b"b", age_days=2)
+        plan = self.plan()
+        year = time.localtime(self.now).tm_year
+        img = self.group(plan, "sort:Pictures").items[0]
+        plan.move_item(img, self.group(plan, f"topic:Receipts:{year}"))
+        learned = self.apply_and_rescan(plan)
+        self.assertEqual(learned.sigs, {"img_#.jpg": "topic:Receipts"})
+
+        self.make("IMG_2077.jpg", b"c", age_days=2)
+        self.make("IMG_1990.jpg", b"d", age_days=2 * 365 + 30)
+        plan = self.plan(learned=learned)
+        self.assertEqual(self.paths(plan, f"topic:Receipts:{year}"), ["IMG_2077.jpg"])
+        self.assertEqual(self.paths(plan, f"topic:Receipts:{year - 2}"), ["IMG_1990.jpg"])
+        self.assertIn("before", self.group(plan, f"topic:Receipts:{year}").items[0].reason)
+        self.assertIsNone(self.group(plan, "sort:Pictures"))
+
+    def test_learns_destinations(self):
+        pictures = os.path.join(self.tmp, "Pictures")
+        os.makedirs(pictures)
+        self.make("cat.png", b"a", age_days=2)
+        self.make("Screenshot from 2025-01-01.png", b"b", age_days=2)
+        plan = self.plan()
+        self.group(plan, "sort:Pictures").dest = pictures
+        self.group(plan, "topic:Screenshots:2025").dest = os.path.join(self.dir, "Shots", "2025")
+        os.makedirs(os.path.join(self.dir, "Shots"))
+        learned = self.apply_and_rescan(plan)
+        self.assertEqual(learned.dests, {"sort:Pictures": pictures, "topic:Screenshots": os.path.join("Shots", "{year}")})
+
+        os.makedirs(os.path.join(self.dir, "Shots"))
+        self.make("dog.png", b"c", age_days=2)
+        self.make("Screenshot from 2026-02-02.png", b"d", age_days=2)
+        plan = self.plan(learned=learned)
+        self.assertEqual(self.group(plan, "sort:Pictures").dest, pictures)
+        self.assertEqual(self.group(plan, "topic:Screenshots:2026").dest, os.path.join(self.dir, "Shots", "2026"))
+
+    def test_unchanged_plan_learns_nothing_and_forget(self):
+        self.make("IMG_1.jpg", b"a", age_days=2)
+        learned = self.apply_and_rescan(self.plan())
+        self.assertEqual((learned.dests, learned.sigs), ({}, {}))
+        self.assertEqual(self.history.forget(), 0)
 
 
 class Ops(Base):
