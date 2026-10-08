@@ -51,6 +51,7 @@ class Frontend:
         self.before = snapshot(self.folder)
         self.history = History(os.path.join(self.tmp, "data"))
         os.environ["XDG_CONFIG_HOME"] = os.path.join(self.tmp, "config")
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.tmp, "data")
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -74,6 +75,12 @@ class Frontend:
     def check_restored(self):
         self.assertEqual(snapshot(self.folder), self.before)
         self.assertEqual(sorted(os.listdir(self.folder)), sorted(self.before))
+
+
+def rules_text():
+    from tidy.core import sentences
+    with open(sentences.rules_path()) as fh:
+        return fh.read()
 
 
 class QtFrontend(Frontend, unittest.TestCase):
@@ -116,6 +123,31 @@ class QtFrontend(Frontend, unittest.TestCase):
         win.undo(win.last_run)
         self.wait(lambda: win.stack.currentWidget() is win.home, "undo")
         self.check_restored()
+        win.close()
+
+    def test_watch_dialog(self):
+        q = self.q
+        win = q.MainWindow(self.history)
+        shown = []
+        orig = q.QMessageBox.information
+        q.QMessageBox.information = staticmethod(lambda *a: shown.append(a[1]))
+        try:
+            dialog = q.WatchDialog(win)
+            self.assertEqual(dialog.list.count(), 0)
+            dialog.add_folder(self.folder)
+            dialog.add_folder(os.path.expanduser("~"))
+            self.assertEqual(shown, ["Tidy Can't Watch This Folder"])
+            self.assertEqual(dialog.list.count(), 1)
+            dialog.threshold.setValue(7)
+            dialog.minutes.setValue(30)
+            self.assertIn("tell me after 7 new files every 30 minutes", rules_text())
+            dialog.list.item(0).setSelected(True)
+            dialog.remove.click()
+            self.assertEqual(dialog.list.count(), 0)
+            self.assertNotIn("Watch", rules_text().replace("# Watch", ""))
+        finally:
+            q.QMessageBox.information = orig
+        dialog.close()
         win.close()
 
     def test_protected_folder_is_refused(self):
@@ -181,6 +213,31 @@ class GtkFrontend(Frontend, unittest.TestCase):
         self.wait(lambda: win.nav.get_visible_page().get_tag() == "start", "undo")
         self.wait(lambda: snapshot(self.folder) == self.before, "files to come back", timeout=5)
         self.check_restored()
+        win.destroy()
+
+    def test_watch_dialog(self):
+        g = self.g
+        self.app.history = self.history
+        win = g.Window(self.app)
+        alerts = []
+        win.alert = lambda heading, body: alerts.append(heading)
+        win.present()
+        dialog = g.WatchDialog(win)
+        dialog.present(win)
+        self.pump()
+        dialog.add_folder(self.folder)
+        dialog.add_folder(os.path.expanduser("~"))
+        self.assertEqual(alerts, ["Tidy Can't Watch This Folder"])
+        self.assertEqual([r.get_subtitle() for r in dialog.rows], [g.tilde(self.folder)])
+        dialog.threshold.set_value(7)
+        dialog.minutes.set_value(30)
+        self.pump()
+        self.assertIn("tell me after 7 new files every 30 minutes", rules_text())
+        name = dialog.settings.folders()[0][0]
+        dialog.settings.remove(name)
+        dialog.fill()
+        self.assertEqual(dialog.rows[0].get_title(), "No folders yet")
+        dialog.close()
         win.destroy()
 
     def test_protected_folder_is_refused(self):

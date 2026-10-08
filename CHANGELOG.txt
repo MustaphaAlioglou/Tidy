@@ -1,6 +1,21 @@
 Tidy changelog
 ==============
 
+Unreleased
+----------
+
+Added
+  * Watch Folders settings in both apps (main menu). Turn watching on or
+    off, add or remove watched folders, and set how many new files make a
+    notification and how often to check. Saved as the Watch line in
+    rules.txt; other rules and comments are kept as they are.
+  * Folder names in Watch lines can be quoted, so names with spaces,
+    commas or "and" work.
+
+Changed
+  * The watcher notices edits to rules.txt within half a minute instead
+    of waiting for its next check.
+
 0.4.0 (2026-10-08)
 ------------------
 

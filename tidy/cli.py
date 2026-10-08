@@ -68,9 +68,6 @@ def _rules(args):
 def _watch(args):
     from . import watch
     if args.on:
-        rs = sentences.load()
-        if not rs.watch.folders:
-            _add_rule("Watch Downloads")
         watch.enable()
         print("Watching. Tidy starts with your session and checks your watched folders now and then.")
     elif args.off:
@@ -78,7 +75,7 @@ def _watch(args):
         print("Stopped watching." if pid else "Watching was not running; autostart is off.")
     elif args.status:
         pid = watch.running_pid()
-        auto = os.path.exists(watch.autostart_path())
+        auto = watch.is_enabled()
         rs = sentences.load()
         print(f"running: {'yes (pid ' + str(pid) + ')' if pid else 'no'}, starts with session: {'yes' if auto else 'no'}")
         print(f"folders: {', '.join(rs.watch.folders) or 'none'}, every {rs.watch.interval // 60} min, "

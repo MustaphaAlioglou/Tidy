@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -182,6 +183,18 @@ class WatchControl(Isolated):
         self.assertEqual(watch.running_pid(), os.getpid())
         self.assertEqual(watch.run(once=True), 1)
 
+    def test_sleep_wakes_when_rules_change(self):
+        os.makedirs(os.path.dirname(sentences.rules_path()))
+        open(sentences.rules_path(), "w").close()
+        start = time.monotonic()
+        watch._sleep(0.3, step=0.05)
+        self.assertGreaterEqual(time.monotonic() - start, 0.3)
+        t = threading.Timer(0.1, lambda: os.utime(sentences.rules_path(), (1, 1)))
+        t.start()
+        start = time.monotonic()
+        watch._sleep(30, step=0.05)
+        self.assertLess(time.monotonic() - start, 5)
+
     def test_watched_since_counts_from_last_run(self):
         history = History()
         dl = self.folder("Downloads")
@@ -192,6 +205,48 @@ class WatchControl(Isolated):
         self.make("Downloads/x.png")
         history.apply(make_plan(dl, rules=sentences.RuleSet()))
         self.assertGreater(history.watched_since(dl), 200)
+
+
+class WatchSettingsModel(Isolated):
+    def test_save_watch_keeps_other_lines(self):
+        os.makedirs(os.path.dirname(sentences.rules_path()))
+        with open(sentences.rules_path(), "w") as fh:
+            fh.write("# mine\nWatch Desktop\nHold torrent files older than 2 weeks\nNotify me after 3 new files\n")
+        sentences.save_watch(sentences.Watch(["Downloads", "~/My Stuff, Old"], 7, 3600))
+        with open(sentences.rules_path()) as fh:
+            lines = fh.read().splitlines()
+        self.assertEqual(lines, ["# mine", "Hold torrent files older than 2 weeks",
+                                 'Watch Downloads and "~/My Stuff, Old", and tell me after 7 new files every 1 hour'])
+        rs = sentences.load()
+        self.assertEqual((rs.watch.folders, rs.watch.threshold, rs.watch.interval, len(rs.rules)),
+                         (["Downloads", "~/My Stuff, Old"], 7, 3600, 1))
+
+    def test_add_remove_and_numbers(self):
+        dl, stuff = self.folder("Downloads"), self.folder("My Stuff")
+        ws = watch.WatchSettings()
+        self.assertTrue(ws.add(stuff))
+        self.assertFalse(ws.add(stuff + "/"), "already watched")
+        with self.assertRaises(watch.Protected):
+            ws.add(self.home)
+        with self.assertRaises(watch.Protected):
+            ws.add(self.folder(".cache"))
+        ws.threshold, ws.minutes = 9, 45
+        fresh = watch.WatchSettings()
+        self.assertEqual(fresh.folders(), [("~/My Stuff", stuff)])
+        self.assertEqual((fresh.threshold, fresh.minutes), (9, 45))
+        fresh.remove("~/My Stuff")
+        self.assertEqual(watch.WatchSettings().folders(), [])
+        self.assertTrue(dl)
+
+    def test_turning_on_adds_downloads(self):
+        self.folder("Downloads")
+        ws = watch.WatchSettings()
+        with mock.patch.object(watch.subprocess, "Popen"):
+            ws.enabled = True
+        self.assertTrue(ws.enabled)
+        self.assertEqual([n for n, _ in ws.folders()], ["Downloads"])
+        ws.enabled = False
+        self.assertFalse(watch.WatchSettings().enabled)
 
 
 class Install(Isolated):

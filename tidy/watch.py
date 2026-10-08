@@ -162,10 +162,33 @@ def run(once=False):
         ruleset = watcher.check_all()
         if once:
             return 0
-        time.sleep(ruleset.watch.interval)
+        _sleep(ruleset.watch.interval)
+
+
+def _rules_mtime():
+    try:
+        return os.stat(sentences.rules_path()).st_mtime
+    except OSError:
+        return None
+
+
+def _sleep(seconds, step=30):
+    """Wait, but wake early when the rules change so new settings apply
+    straight away."""
+    start, end = _rules_mtime(), time.monotonic() + seconds
+    while time.monotonic() < end:
+        time.sleep(min(step, max(0, end - time.monotonic())))
+        if _rules_mtime() != start:
+            return
 
 
 def enable():
+    """Start watching now and with every session. With no watched folders
+    yet, Downloads is added."""
+    ruleset = sentences.load()
+    if not ruleset.watch.folders:
+        ruleset.watch.folders = ["Downloads"]
+        sentences.save_watch(ruleset.watch)
     path = autostart_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
@@ -180,6 +203,10 @@ def enable():
                          stdin=subprocess.DEVNULL, stdout=log, stderr=log)
 
 
+def is_enabled():
+    return os.path.exists(autostart_path())
+
+
 def disable():
     try:
         os.unlink(autostart_path())
@@ -189,3 +216,62 @@ def disable():
     if pid:
         os.kill(pid, signal.SIGTERM)
     return pid
+
+
+class WatchSettings:
+    """What the settings screens edit: the watched folders, how many new
+    files make a notification, how often to look, and whether watching is on."""
+
+    def __init__(self):
+        self.watch = sentences.load().watch
+
+    def folders(self):
+        return [(name, sentences.resolve_place(name)) for name in self.watch.folders]
+
+    def add(self, path):
+        """Add a folder; raises Protected for folders Tidy won't touch.
+        Returns False when it is already watched."""
+        real = check_folder(path)
+        if any(os.path.realpath(p) == real for _, p in self.folders()):
+            return False
+        home = os.path.realpath(os.path.expanduser("~"))
+        self.watch.folders.append("~" + real[len(home):] if real.startswith(home + os.sep) else real)
+        self._save()
+        return True
+
+    def remove(self, name):
+        self.watch.folders.remove(name)
+        self._save()
+
+    @property
+    def threshold(self):
+        return self.watch.threshold
+
+    @threshold.setter
+    def threshold(self, n):
+        self.watch.threshold = max(1, int(n))
+        self._save()
+
+    @property
+    def minutes(self):
+        return self.watch.interval // 60
+
+    @minutes.setter
+    def minutes(self, n):
+        self.watch.interval = max(1, int(n)) * 60
+        self._save()
+
+    @property
+    def enabled(self):
+        return is_enabled()
+
+    @enabled.setter
+    def enabled(self, on):
+        if on:
+            enable()
+            self.watch = sentences.load().watch
+        else:
+            disable()
+
+    def _save(self):
+        sentences.save_watch(self.watch)

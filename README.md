@@ -87,8 +87,12 @@ Watch Downloads and Desktop, and tell me after 30 new files
 
 ### Watch mode
 
-`tidy-cli watch --on` starts a small background watcher and adds it to your
-session's autostart. Every 15 minutes it looks at the folders in your `Watch`
+Turn it on from **Watch Folders…** in the app's main menu, or with
+`tidy-cli watch --on`. Either way, a small background watcher starts and is
+added to your session's autostart. In the app you can also add or remove
+watched folders, set how many new files trigger a notification, and set how
+often it checks. The app saves these as the `Watch` line in your rules file,
+and the watcher picks up changes within half a minute. Every 15 minutes it looks at the folders in your `Watch`
 lines (Downloads if there are none):
 
 - **Notifications.** When enough new files have arrived (20 by default), it
@@ -249,6 +253,7 @@ tests/         unit, GUI and distribution tests
 - **v0.4:** ✅ watch mode with gentle notifications ("47 new files. Tidy
   up?"), and rules written as plain sentences. Nothing moves without asking
   unless you turn on auto-tidy for a rule.
-- **Next:** editing rules and turning watch mode on from the app itself.
+- **Next:** editing your rules from the app itself (watch settings are
+  already there).
 
 See [CHANGELOG.txt](CHANGELOG.txt) for what changed in each version.

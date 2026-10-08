@@ -257,9 +257,15 @@ def _parse_watch(watch, body):
     if notify:
         watch.threshold = max(1, int(notify.group(1)))
         body = body[:notify.start()]
-    for name in _SPLIT.split(body.strip().rstrip(",")):
-        if name.strip():
-            watch.folders.append(name.strip().strip("\"'"))
+    quoted = re.findall(r'"([^"]+)"', body)
+    rest = re.sub(r'"[^"]+"', "\0", body)
+    names = []
+    for part in _SPLIT.split(rest.strip().strip(",")):
+        name = part.strip().strip("'")
+        names.append(quoted.pop(0) if name == "\0" else name)
+    for name in names:
+        if name.strip() and name not in watch.folders:
+            watch.folders.append(name.strip())
 
 
 def parse(text):
@@ -281,6 +287,39 @@ def parse(text):
         except RuleError as e:
             out.errors.append((n, line, str(e)))
     return out
+
+
+def _quote(name):
+    return f'"{name}"' if re.search(r"[\s,'\"]", name) else name
+
+
+def watch_sentence(watch):
+    """The one "Watch ..." line that the settings screen writes."""
+    names = [_quote(n) for n in watch.folders]
+    listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    minutes = watch.interval // 60
+    every = f"{minutes // 60} hours" if minutes % 60 == 0 and minutes > 60 else (
+        "1 hour" if minutes == 60 else f"{minutes} minutes")
+    return f"Watch {listed}, and tell me after {watch.threshold} new files every {every}"
+
+
+def save_watch(watch, path=None):
+    """Replace the Watch and "tell me after" lines, keeping every other line."""
+    path = path or rules_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        lines = EXAMPLES.splitlines()
+    keep = [line for line in lines
+            if not (_WATCH.match(line.strip().rstrip(".")) or _NOTIFY_ONLY.match(line.strip().rstrip(".")))]
+    if watch.folders:
+        keep.append(watch_sentence(watch))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(keep) + "\n")
+    os.replace(tmp, path)
 
 
 def config_dir():

@@ -6,15 +6,16 @@ import time
 from PySide6.QtCore import QDateTime, QFileInfo, QLocale, QMimeDatabase, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtDBus import QDBus, QDBusConnection, QDBusMessage
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QPalette
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox,
-                               QFileDialog, QFileIconProvider, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-                               QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSizePolicy,
-                               QStackedWidget, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                               QFileDialog, QFileIconProvider, QFormLayout, QFrame, QGridLayout, QGroupBox,
+                               QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                               QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSpinBox, QStackedWidget,
+                               QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import (APP_ID, HOLD, HOLD_DAYS, MOVE, VERSION, Cancelled, History, Protected, check_folder,
                     make_plan, places)
 from ..core import fmt
+from ..watch import WatchSettings
 
 
 class Bridge(QObject):
@@ -466,6 +467,93 @@ class HistoryDialog(QDialog):
         run_async(fn, done, failed)
 
 
+class WatchDialog(QDialog):
+    def __init__(self, win, settings=None):
+        super().__init__(win)
+        self.win = win
+        self.settings = settings or WatchSettings()
+        self.setWindowTitle("Watch Folders")
+        self.resize(560, 480)
+        layout = QVBoxLayout(self)
+
+        self.enabled = QCheckBox("Watch folders and tell me when they need tidying")
+        self.enabled.setChecked(self.settings.enabled)
+        self.enabled.toggled.connect(self.toggled)
+        layout.addWidget(self.enabled)
+        layout.addWidget(dim(QLabel("Tidy checks now and then and starts with your session. Only rules that end "
+                                    "in \u201cautomatically\u201d move files without asking.", wordWrap=True)))
+
+        box = QGroupBox("Folders")
+        folders = QVBoxLayout(box)
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.itemSelectionChanged.connect(self.update_buttons)
+        folders.addWidget(self.list)
+        buttons = QHBoxLayout()
+        add = QPushButton(icon("list-add", "folder-new"), "Add Folder…")
+        add.clicked.connect(self.choose)
+        self.remove = QPushButton(icon("list-remove", "edit-delete"), "Stop Watching")
+        self.remove.clicked.connect(self.remove_selected)
+        buttons.addWidget(add)
+        buttons.addWidget(self.remove)
+        buttons.addStretch()
+        folders.addLayout(buttons)
+        layout.addWidget(box)
+
+        form = QFormLayout()
+        self.threshold = QSpinBox(minimum=1, maximum=500, suffix=" new files")
+        self.threshold.setValue(self.settings.threshold)
+        self.threshold.valueChanged.connect(lambda v: setattr(self.settings, "threshold", v))
+        self.minutes = QSpinBox(minimum=5, maximum=1440, singleStep=5, suffix=" minutes")
+        self.minutes.setValue(self.settings.minutes)
+        self.minutes.valueChanged.connect(lambda v: setattr(self.settings, "minutes", v))
+        form.addRow("Notify after:", self.threshold)
+        form.addRow("Check every:", self.minutes)
+        layout.addLayout(form)
+
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.rejected.connect(self.reject)
+        layout.addWidget(close)
+        self.fill()
+
+    def fill(self):
+        self.list.clear()
+        for name, path in self.settings.folders():
+            missing = "" if os.path.isdir(path) else "  (not found)"
+            item = QListWidgetItem(icon("folder"), tilde(path) + missing)
+            item.setData(Qt.UserRole, name)
+            self.list.addItem(item)
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.remove.setEnabled(bool(self.list.selectedItems()))
+
+    def toggled(self, on):
+        if on != self.settings.enabled:
+            self.settings.enabled = on
+            self.fill()
+
+    def add_folder(self, path):
+        try:
+            added = self.settings.add(path)
+        except Protected as e:
+            QMessageBox.information(self, "Tidy Can't Watch This Folder", str(e))
+            return
+        if not added:
+            QMessageBox.information(self, "Already Watched", f"{tilde(path)} is already watched.")
+        self.fill()
+
+    def choose(self):
+        path = QFileDialog.getExistingDirectory(self, "Choose a Folder to Watch", os.path.expanduser("~"))
+        if path:
+            self.add_folder(path)
+
+    def remove_selected(self):
+        for item in self.list.selectedItems():
+            self.settings.remove(item.data(Qt.UserRole))
+        self.fill()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, history):
         super().__init__()
@@ -499,6 +587,7 @@ class MainWindow(QMainWindow):
         history.triggered.connect(lambda: HistoryDialog(self).exec())
         bar.addAction(history)
         menu = QMenu(self)
+        menu.addAction(icon("view-refresh", "folder-sync"), "Watch Folders…", lambda: WatchDialog(self).exec())
         menu.addAction(icon("help-about"), "About Tidy", self.about)
         menu.addSeparator()
         quit_action = menu.addAction(icon("application-exit"), "Quit", self.close)

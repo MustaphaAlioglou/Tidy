@@ -17,6 +17,7 @@ if (Adw.get_major_version(), Adw.get_minor_version()) < ADW_MIN:
 from ..core import (APP_ID, HOLD, HOLD_DAYS, MOVE, VERSION, Cancelled, History, Protected,  # noqa: E402
                     check_folder, make_plan, places)
 from ..core import fmt  # noqa: E402
+from ..watch import WatchSettings  # noqa: E402
 
 size = GLib.format_size
 
@@ -131,6 +132,7 @@ class Window(Adw.ApplicationWindow):
             child=Adw.Clamp(maximum_size=420, child=boxed_rows(None, rows)))
 
         menu = Gio.Menu()
+        menu.append("_Watch Folders…", "app.watch")
         menu.append("_About Tidy", "app.about")
         menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, primary=True,
                                      tooltip_text="Main Menu")
@@ -554,6 +556,91 @@ class HistoryDialog(Adw.Dialog):
                   lambda e: self.win.alert("Could Not Undo", str(e)))
 
 
+class WatchDialog(Adw.PreferencesDialog):
+    def __init__(self, win, settings=None):
+        super().__init__(title="Watch Folders", content_width=520, content_height=600)
+        self.win = win
+        self.settings = settings or WatchSettings()
+        prefs = Adw.PreferencesPage()
+        self.add(prefs)
+
+        self.switch = Adw.SwitchRow(title="Watch Folders",
+                                    subtitle="Tidy checks these folders now and then and starts with your session",
+                                    active=self.settings.enabled)
+        self.switch.connect("notify::active", self.toggled)
+        prefs.add(boxed_rows(None, [self.switch]))
+
+        self.folder_group = Adw.PreferencesGroup(
+            title="Folders", description="You get a notification when enough new files pile up in one of these.")
+        add = Gtk.Button(child=Adw.ButtonContent(icon_name="list-add-symbolic", label="Add Folder…"),
+                         css_classes=["flat"])
+        add.connect("clicked", lambda *_: self.choose())
+        self.folder_group.set_header_suffix(add)
+        prefs.add(self.folder_group)
+        self.rows = []
+
+        self.threshold = Adw.SpinRow.new_with_range(1, 500, 1)
+        self.threshold.set_title("Notify After")
+        self.threshold.set_subtitle("New files in one folder")
+        self.threshold.set_value(self.settings.threshold)
+        self.threshold.connect("notify::value", lambda r, _p: setattr(self.settings, "threshold", r.get_value()))
+        self.minutes = Adw.SpinRow.new_with_range(5, 1440, 5)
+        self.minutes.set_title("Check Every")
+        self.minutes.set_subtitle("Minutes")
+        self.minutes.set_value(self.settings.minutes)
+        self.minutes.connect("notify::value", lambda r, _p: setattr(self.settings, "minutes", r.get_value()))
+        prefs.add(boxed_rows("Notifications", [self.threshold, self.minutes],
+                             "Only rules that end in \u201cautomatically\u201d move files without asking."))
+        self.fill()
+
+    def fill(self):
+        for row in self.rows:
+            self.folder_group.remove(row)
+        self.rows = []
+        for name, path in self.settings.folders():
+            missing = not os.path.isdir(path)
+            row = plain_row(os.path.basename(path.rstrip(os.sep)) or path,
+                            tilde(path) + (" · not found" if missing else ""))
+            row.add_prefix(Gtk.Image.new_from_icon_name(sym("folder-symbolic")))
+            remove = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                                css_classes=["flat"], tooltip_text="Stop Watching")
+            remove.connect("clicked", lambda *_, n=name: (self.settings.remove(n), self.fill()))
+            row.add_suffix(remove)
+            self.folder_group.add(row)
+            self.rows.append(row)
+        if not self.rows:
+            row = plain_row("No folders yet", "Add one, or turn watching on to start with Downloads.")
+            self.folder_group.add(row)
+            self.rows.append(row)
+
+    def toggled(self, switch, _pspec):
+        if switch.get_active() != self.settings.enabled:
+            self.settings.enabled = switch.get_active()
+            self.fill()
+
+    def add_folder(self, path):
+        try:
+            added = self.settings.add(path)
+        except Protected as e:
+            self.win.alert("Tidy Can't Watch This Folder", str(e))
+            return
+        if not added:
+            self.win.toast(f"{os.path.basename(path)} is already watched")
+        self.fill()
+
+    def choose(self):
+        dialog = Gtk.FileDialog(title="Choose a Folder to Watch", modal=True)
+
+        def picked(d, res):
+            try:
+                folder = d.select_folder_finish(res)
+            except GLib.Error:
+                return
+            if folder and folder.get_path():
+                self.add_folder(folder.get_path())
+        dialog.select_folder(self.win, None, picked)
+
+
 class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_OPEN)
@@ -561,6 +648,9 @@ class App(Adw.Application):
         about = Gio.SimpleAction.new("about", None)
         about.connect("activate", self.on_about)
         self.add_action(about)
+        watch = Gio.SimpleAction.new("watch", None)
+        watch.connect("activate", lambda *_: WatchDialog(self.window()).present(self.window()))
+        self.add_action(watch)
         quit_ = Gio.SimpleAction.new("quit", None)
         quit_.connect("activate", lambda *_: self.quit())
         self.add_action(quit_)
